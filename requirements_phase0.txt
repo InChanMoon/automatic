@@ -1,0 +1,14 @@
+# Phase 0: Test dependencies
+
+playwright==1.41.0
+playwright-stealth==1.0.6
+pyperclip==1.8.2
+setuptools
+Pillow
+
+# Install:
+# pip install -r requirements_phase0.txt
+# python -m playwright install chromium
+#
+# Create test image:
+# python test/create_test_image.py

@@ -1,0 +1,17 @@
+{
+  "google_drive": {
+    "root_folder_id": "YOUR_DRIVE_FOLDER_ID",
+    "delete_after_use": false,
+    "move_to_used": true
+  },
+  "gemini_api": {
+    "api_key": "YOUR_GEMINI_API_KEY"
+  },
+  "claude_api": {
+    "api_key": "YOUR_CLAUDE_API_KEY_HERE"
+  },
+  "google_sheets": {
+    "spreadsheet_id": "YOUR_SPREADSHEET_ID"
+  },
+  "default_license": "LICENSE-ADMIN"
+}

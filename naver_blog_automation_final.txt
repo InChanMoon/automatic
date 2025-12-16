@@ -1,0 +1,749 @@
+# 네이버 블로그 자동화 시스템 최종 기획서
+
+## 1. 프로젝트 개요
+
+### 목적
+네이버 블로그에 글을 대량으로 자동 발행하는 시스템
+
+### 핵심 흐름
+```
+키워드 입력 → AI가 글 N개 생성 → 사용자 검토/이미지 추가 → 특정 계정에 자동 발행
+```
+
+---
+
+## 2. 시스템 구성
+
+### 2.1 전체 구조
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         전체 시스템                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  [사용자 A PC]     [사용자 B PC]     [사용자 C PC]                    │
+│       │                │                │                           │
+│  콘텐츠 생성기     콘텐츠 생성기     콘텐츠 생성기                     │
+│  (로컬 GUI)       (로컬 GUI)       (로컬 GUI)                       │
+│       │                │                │                           │
+│       └────────────────┼────────────────┘                           │
+│                        ▼                                            │
+│               ┌──────────────────┐                                  │
+│               │  Google Sheets   │ ← 중앙 데이터베이스               │
+│               │  + Google Drive  │ ← 이미지 저장소                   │
+│               └────────┬─────────┘                                  │
+│                        │                                            │
+│                        ▼                                            │
+│               ┌──────────────────┐                                  │
+│               │    발행 봇 PC     │ ← 한 대에서 상시 실행             │
+│               │                  │                                  │
+│               │  ┌────────────┐  │                                  │
+│               │  │ 발행 봇    │  │                                  │
+│               │  └─────┬──────┘  │                                  │
+│               │        │         │                                  │
+│               │  ┌─────┴──────┐  │                                  │
+│               │  │ IP 관리    │  │                                  │
+│               │  │-USB테더링  │  │                                  │
+│               │  │-프록시     │  │                                  │
+│               │  └────────────┘  │                                  │
+│               └────────┬─────────┘                                  │
+│                        │                                            │
+│                        ▼                                            │
+│                  네이버 블로그                                       │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 프로그램 목록
+
+| 프로그램 | 역할 | 형태 |
+|----------|------|------|
+| 콘텐츠 생성기 | 키워드→AI 글 대량 생성, 검토, 이미지 지정, 발행큐 등록 | 로컬 GUI (PyQt6) |
+| 발행 봇 | 발행큐에서 작업 가져와 자동 발행 | 로컬 스크립트 |
+| IP 관리자 | USB 테더링 또는 프록시로 IP 변경 | 발행 봇에 통합 |
+
+---
+
+## 3. 프로그램 1: 콘텐츠 생성기
+
+### 3.1 기능
+
+1. **키워드 + 생성 개수 입력**
+   - 키워드: "yatpor 사기"
+   - 개수: 1~100+ (사용자 자유 설정)
+   - 스타일: 정보성/후기형/비교분석
+   - 길이: 짧게(500자)/보통(1000자)/길게(1500자+)
+
+2. **AI 대량 생성**
+   - 지정 개수만큼 글 생성
+   - 각 글마다 제목, 구조, 표현, 예시 전부 다르게
+   - 진행률 표시
+
+3. **검토 및 수정**
+   - 생성된 글 목록 보기
+   - 개별 글 수정/삭제/재생성
+   - 이미지 지정 (공통 또는 개별)
+
+4. **발행 설정**
+   - 발행할 계정 선택
+   - 배분 방식 (한 계정에 전부 / 여러 계정에 분산)
+   - 발행 간격 설정
+
+5. **발행큐 등록**
+   - Google Sheets 발행큐에 작업 등록
+
+### 3.2 AI 글 다양성 보장
+
+```python
+diversity_prompt = """
+키워드: {keyword}
+생성할 글 번호: {current_number} / {total_count}
+
+필수 조건 - 반드시 이전 글들과 다르게 작성:
+
+1. 제목: 완전히 다른 형식 사용
+   - 의문형: "~일까요?", "~하는 이유는?"
+   - 숫자형: "~하는 5가지 방법", "TOP 10"
+   - 후기형: "직접 겪어본 ~", "실제 경험담"
+   - 경고형: "주의!", "조심하세요"
+   - 정보형: "~총정리", "~가이드"
+   
+2. 서론: 다른 방식으로 시작
+   - 질문으로 시작
+   - 통계/수치로 시작
+   - 개인 경험담으로 시작
+   - 최근 뉴스/이슈 언급
+   - 공감 유도로 시작
+   
+3. 본문 구조: 매번 다른 전개
+   - 원인 → 결과 분석
+   - 사례 나열 → 종합 분석
+   - 비교 → 결론 도출
+   - 시간순 설명
+   - 중요도순 설명
+   
+4. 예시/사례: 매번 다른 상황 설정
+   - 다른 인물, 다른 금액, 다른 상황
+   
+5. 말투 톤: 약간씩 변화
+   - 진지한 톤
+   - 친근한 톤
+   - 전문적인 톤
+   - 걱정/주의 환기 톤
+
+이전에 생성된 제목들 (중복 금지):
+{previous_titles}
+
+출력 형식:
+[TITLE]제목[/TITLE]
+[BODY]
+본문 내용...
+[IMAGE:1] ← 이미지 삽입 위치
+추가 내용...
+[/BODY]
+"""
+```
+
+### 3.3 GUI 화면 구성
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  네이버 블로그 콘텐츠 생성기                            [─][□][×] │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  [입력]                                                         │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │ 키워드: [____________________]  생성 개수: [____]          │ │
+│  │ 스타일: ○정보성 ●후기형 ○비교분석    길이: ●보통 ○길게   │ │
+│  │                                                           │ │
+│  │ [대량 생성 시작]                                          │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│                                                                 │
+│  [생성된 글 목록] (12/30 완료)                                   │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │ ☑ #1  yatpor 사기 피해 예방법 총정리        [수정] [삭제] │ │
+│  │ ☑ #2  yatpor 사기 당하지 않는 5가지 방법   [수정] [삭제] │ │
+│  │ ☑ #3  yatpor 실제 피해 사례 모음           [수정] [삭제] │ │
+│  │ ...                                                       │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│                                                                 │
+│  [이미지 설정]                                                   │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │ ○ 이미지 없음                                             │ │
+│  │ ● 공통 이미지: [드라이브 경로_______] [파일선택]          │ │
+│  │ ○ 글마다 개별 지정                                        │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│                                                                 │
+│  [발행 설정]                                                     │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │ 계정 선택:                                                │ │
+│  │ ☑ A001 (user1)                                           │ │
+│  │ ☐ A002 (user2)                                           │ │
+│  │                                                           │ │
+│  │ 발행 간격: [15]분 ~ [30]분 (랜덤)                         │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│                                                                 │
+│  [발행큐에 등록]                                                 │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. 프로그램 2: 발행 봇
+
+### 4.1 기술 스택
+
+- Python
+- Playwright + playwright-stealth (봇 탐지 우회 강력)
+- pyperclip (클립보드 복사/붙여넣기)
+- gspread (Google Sheets 연동)
+
+### 4.2 안티봇탐지 설정
+
+```python
+from playwright.sync_api import sync_playwright
+from playwright_stealth import stealth_sync
+
+def create_browser():
+    playwright = sync_playwright().start()
+    
+    browser = playwright.chromium.launch(
+        headless=False,  # 눈으로 확인
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--disable-infobars",
+            "--disable-dev-shm-usage",
+            "--disable-browser-side-navigation",
+            "--disable-gpu",
+            "--no-sandbox",
+            "--disable-extensions",
+            "--lang=ko-KR",
+            "--window-size=1920,1080",
+        ]
+    )
+    
+    context = browser.new_context(
+        viewport={"width": 1920, "height": 1080},
+        locale="ko-KR",
+        timezone_id="Asia/Seoul",
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    )
+    
+    page = context.new_page()
+    
+    # playwright-stealth 적용
+    stealth_sync(page)
+    
+    return playwright, browser, context, page
+```
+
+**적용된 우회 기법:**
+- `playwright-stealth` - navigator.webdriver 제거, 핑거프린트 위장
+- `--disable-blink-features=AutomationControlled` - 자동화 탐지 차단
+- User-Agent 실제 크롬 값으로 설정
+- locale, timezone 한국으로 설정
+- viewport 고정으로 일관된 환경
+
+### 4.3 입력 방식 (send_keys 사용 금지)
+
+```python
+import pyperclip
+import time
+import random
+
+def paste_text(page, selector, text):
+    """클립보드 복사 후 Ctrl+V로 붙여넣기"""
+    
+    pyperclip.copy(text)
+    page.click(selector)
+    time.sleep(random.uniform(0.3, 0.7))
+    page.keyboard.press("Control+v")
+    time.sleep(random.uniform(0.5, 1.2))
+```
+
+### 4.4 지연 시간 설정
+
+```python
+DELAYS = {
+    "page_load": (2, 5),
+    "before_click": (0.3, 0.8),
+    "after_input": (0.5, 1.5),
+    "between_actions": (1, 3),
+    "before_publish": (2, 4),
+    "between_posts": (600, 1800),  # 10~30분
+}
+
+def random_delay(delay_type):
+    min_sec, max_sec = DELAYS[delay_type]
+    time.sleep(random.uniform(min_sec, max_sec))
+```
+
+### 4.5 네이버 블로그 자동화 정보
+
+#### URL
+```python
+URLS = {
+    "login": "https://nid.naver.com/nidlogin.login?url=https%3A%2F%2Fsection.blog.naver.com%2FBlogHome.naver",
+    "blog_write": "https://blog.naver.com/GoBlogWrite.naver"
+}
+```
+
+#### 셀렉터
+```python
+SELECTORS = {
+    # 로그인 페이지
+    "id_input": "#id",
+    "pw_input": "#pw",
+    "login_button": "#log\\.login",
+    
+    # 글쓰기 페이지
+    "main_frame": "#mainFrame",  # iframe 전환 필요
+    "popup_cancel": ".se-popup-button_cancel",  # 있으면 클릭
+    "help_panel_close": ".se-help-panel-close-button",  # 있으면 클릭
+    "title_area": ".se-section-documentTitle",
+    "content_area": ".se-section-text",
+    "publish_button": "button[class*='publish_btn']",
+    "publish_confirm": "button[data-testid='seOnePublishBtn']",
+}
+```
+
+#### 자동화 흐름
+```
+1. Playwright + stealth로 브라우저 실행 (headless=False)
+2. 로그인 페이지 접속
+3. 아이디 입력 (클립보드 붙여넣기)
+4. 비밀번호 입력 (클립보드 붙여넣기)
+5. 로그인 버튼 클릭
+6. 로그인 성공 확인
+7. 글쓰기 페이지 접속
+8. iframe 전환 (page.frame_locator() 또는 page.frame())
+9. 팝업 닫기 (.se-popup-button_cancel) - 있으면
+10. 도움말 패널 닫기 (.se-help-panel-close-button) - 있으면
+11. 제목 영역 클릭 → 제목 붙여넣기
+12. 본문 영역 클릭 → 본문 붙여넣기
+13. 이미지 삽입 (마커 위치에)
+14. 발행 버튼 클릭 (button[class*='publish_btn'])
+15. 발행 확인 버튼 클릭 (button[data-testid='seOnePublishBtn'])
+16. 발행 완료 확인
+17. browser.close(), playwright.stop()
+```
+
+### 4.6 예외처리
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     예외 상황 및 처리                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. 로그인 실패                                                  │
+│     ├─ 원인: 비밀번호 변경, 캡차, 계정 정지                      │
+│     └─ 처리: 계정 "정지" 표시 → 다음 계정 전환 → 알림 발송       │
+│                                                                 │
+│  2. 발행 중 계정 정지                                            │
+│     ├─ 원인: 네이버 정책 위반 감지                               │
+│     └─ 처리: 작업 "실패" → 계정 "정지" → 알림 발송              │
+│                                                                 │
+│  3. 프로그램/PC 중단                                             │
+│     ├─ 원인: 강제종료, 정전, 재부팅                              │
+│     └─ 처리: "진행중" 상태 확인 → 중복 체크 → "대기"부터 재개    │
+│                                                                 │
+│  4. 네트워크 오류                                                │
+│     ├─ 원인: 인터넷 끊김, 타임아웃                               │
+│     └─ 처리: 3회 재시도 → 실패 시 스킵 → 다음 작업              │
+│                                                                 │
+│  5. 페이지 구조 변경                                             │
+│     ├─ 원인: 네이버 에디터 업데이트                              │
+│     └─ 처리: 요소 못 찾으면 전체 중단 → 알림 발송               │
+│                                                                 │
+│  6. 이미지 업로드 실패                                           │
+│     ├─ 원인: 파일 없음, 포맷 오류                                │
+│     └─ 처리: 이미지 없이 발행 또는 스킵 (설정에 따라)            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 4.7 재개 로직
+
+```python
+def resume_publishing():
+    """프로그램 시작 시 실행 - 중단된 작업 처리"""
+    
+    # 1. "진행중" 상태 확인 (이전에 중단된 것)
+    in_progress = get_tasks_by_status("진행중")
+    for task in in_progress:
+        # 실제로 발행됐는지 블로그에서 확인
+        if is_already_published(task):
+            update_status(task, "완료")
+        else:
+            update_status(task, "대기")
+    
+    # 2. "대기" 상태인 것들 순차 처리
+    pending = get_tasks_by_status("대기")
+    for task in pending:
+        process_task(task)
+```
+
+### 4.8 알림 시스템 (텔레그램)
+
+```python
+def send_alert(message):
+    bot_token = "YOUR_BOT_TOKEN"
+    chat_id = "YOUR_CHAT_ID"
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    requests.post(url, data={"chat_id": chat_id, "text": message})
+
+# 알림 발송 시점
+# - 계정 정지 감지
+# - 연속 3회 실패
+# - 배치 발행 완료
+# - 페이지 구조 변경 감지
+```
+
+---
+
+## 5. IP 관리
+
+### 5.1 방법 1: 안드로이드 USB 테더링
+
+```python
+import subprocess
+
+def change_ip_android():
+    """안드로이드 폰 비행기모드 토글로 IP 변경"""
+    
+    # 비행기모드 켜기
+    subprocess.run(["adb", "shell", "cmd", "connectivity", "airplane-mode", "enable"])
+    time.sleep(3)
+    
+    # 비행기모드 끄기
+    subprocess.run(["adb", "shell", "cmd", "connectivity", "airplane-mode", "disable"])
+    time.sleep(5)
+    
+    # USB 테더링 재활성화 (필요시)
+    subprocess.run(["adb", "shell", "svc", "usb", "setFunctions", "rndis"])
+    time.sleep(3)
+    
+    return get_current_ip()
+```
+
+### 5.2 방법 2: 프록시
+
+```python
+class ProxyManager:
+    def __init__(self, proxy_list):
+        self.proxies = proxy_list
+        self.current_index = 0
+    
+    def get_next_proxy(self):
+        proxy = self.proxies[self.current_index]
+        self.current_index = (self.current_index + 1) % len(self.proxies)
+        return proxy
+    
+    def apply_to_browser(self, browser_context):
+        proxy = self.get_next_proxy()
+        # Playwright에 프록시 적용
+        return proxy
+```
+
+### 5.3 설정
+
+```python
+IP_CONFIG = {
+    "method": "usb_tethering",  # 또는 "proxy"
+    
+    # USB 테더링 설정
+    "adb_device_id": "YOUR_DEVICE_ID",
+    
+    # 프록시 설정
+    "proxy_list": [
+        "http://user:pass@proxy1.example.com:8080",
+        "http://user:pass@proxy2.example.com:8080",
+    ],
+    
+    # IP 변경 주기
+    "change_ip_every_n_posts": 5,  # 5개 발행마다 IP 변경
+}
+```
+
+---
+
+## 6. Google Sheets 구조
+
+### 6.1 계정 시트 (accounts)
+
+| 열 | 필드 | 설명 | 예시 |
+|----|------|------|------|
+| A | account_id | 고유 ID | A001 |
+| B | naver_id | 네이버 아이디 | myuser123 |
+| C | password | 비밀번호 | mypass456 |
+| D | status | 상태 | 활성 / 휴식 / 정지 |
+| E | memo | 메모 | |
+
+### 6.2 원고 시트 (contents)
+
+| 열 | 필드 | 설명 | 예시 |
+|----|------|------|------|
+| A | content_id | 고유 ID | C001 |
+| B | batch_id | 배치 ID (같은 키워드 묶음) | B001 |
+| C | keyword | 키워드 | yatpor 사기 |
+| D | title | 제목 | yatpor 사기 피해 예방법 |
+| E | body | 본문 | 내용... |
+| F | image_path | 이미지 경로 (드라이브) | yatpor/img1.jpg |
+| G | status | 상태 | 생성중/검토중/승인완료/발행완료 |
+| H | created_at | 생성일 | 2024-01-15 10:00 |
+
+### 6.3 발행큐 시트 (publish_queue)
+
+| 열 | 필드 | 설명 | 예시 |
+|----|------|------|------|
+| A | task_id | 작업 ID | P001 |
+| B | content_id | 원고 ID | C001 |
+| C | account_id | 계정 ID | A001 |
+| D | status | 상태 | 대기/진행중/완료/실패 |
+| E | retry_count | 재시도 횟수 | 0 |
+| F | error_type | 에러 유형 | login/publish/network |
+| G | error_msg | 에러 메시지 | 캡차 발생 |
+| H | published_url | 발행된 URL | https://blog.naver.com/... |
+| I | started_at | 시작 시간 | 2024-01-15 14:00 |
+| J | completed_at | 완료 시간 | 2024-01-15 14:03 |
+
+### 6.4 로그 시트 (logs)
+
+| 열 | 필드 | 설명 |
+|----|------|------|
+| A | timestamp | 시간 |
+| B | level | INFO/WARNING/ERROR |
+| C | account_id | 계정 ID |
+| D | task_id | 작업 ID |
+| E | message | 로그 메시지 |
+
+---
+
+## 7. 폴더 구조
+
+```
+naver-blog-automation/
+│
+├── content_generator/           # 프로그램 1: 콘텐츠 생성기
+│   ├── main.py
+│   ├── gui/
+│   │   ├── main_window.py
+│   │   ├── content_list.py
+│   │   └── editor.py
+│   ├── ai/
+│   │   ├── generator.py
+│   │   └── prompts.py
+│   └── sheets/
+│       └── content_manager.py
+│
+├── publish_bot/                 # 프로그램 2: 발행 봇
+│   ├── main.py
+│   ├── browser/
+│   │   ├── stealth.py
+│   │   ├── naver_login.py
+│   │   └── blog_writer.py
+│   ├── ip/
+│   │   ├── usb_tethering.py
+│   │   └── proxy_manager.py
+│   ├── sheets/
+│   │   ├── queue_manager.py
+│   │   └── logger.py
+│   └── alert/
+│       └── telegram.py
+│
+├── shared/                      # 공유 모듈
+│   ├── sheets_client.py
+│   ├── drive_client.py
+│   ├── config.py
+│   └── constants.py
+│
+├── test/                        # 테스트
+│   └── test_blog_login.py       # 로그인+글쓰기 테스트
+│
+├── credentials/
+│   └── google_service_account.json
+│
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## 8. 의존성 (requirements.txt)
+
+```
+# 공통
+gspread==5.12.0
+google-auth==2.27.0
+google-auth-oauthlib==1.2.0
+google-api-python-client==2.116.0
+python-dotenv==1.0.0
+requests==2.31.0
+
+# 콘텐츠 생성기
+PyQt6==6.6.1
+anthropic==0.18.0
+
+# 발행 봇
+playwright==1.41.0
+playwright-stealth==1.0.6
+pyperclip==1.8.2
+
+# IP 관리
+adb-shell==0.4.4
+```
+
+**설치 방법:**
+```bash
+pip install playwright playwright-stealth pyperclip
+python -m playwright install chromium
+```
+
+---
+
+## 9. 설정 파일 (config.py)
+
+```python
+# Google Sheets
+GOOGLE_SHEETS = {
+    "spreadsheet_id": "YOUR_SPREADSHEET_ID",
+    "credentials_path": "credentials/google_service_account.json",
+}
+
+# AI API
+AI_CONFIG = {
+    "provider": "anthropic",
+    "api_key": "YOUR_API_KEY",
+    "model": "claude-3-sonnet-20240229",
+}
+
+# 발행 봇
+BOT_CONFIG = {
+    "headless": False,
+    "max_retry": 3,
+    "retry_delay": 60,
+}
+
+# 지연 시간
+DELAYS = {
+    "page_load": (2, 5),
+    "before_click": (0.3, 0.8),
+    "after_input": (0.5, 1.5),
+    "between_actions": (1, 3),
+    "before_publish": (2, 4),
+    "between_posts": (600, 1800),
+}
+
+# IP 관리
+IP_CONFIG = {
+    "method": "usb_tethering",
+    "change_ip_every_n_posts": 5,
+}
+
+# 알림
+ALERT_CONFIG = {
+    "telegram_enabled": True,
+    "telegram_bot_token": "YOUR_BOT_TOKEN",
+    "telegram_chat_id": "YOUR_CHAT_ID",
+}
+```
+
+---
+
+## 10. 개발 순서
+
+### Phase 0: 테스트기 (최우선)
+1. 네이버 로그인 테스트
+2. 글쓰기 테스트 (제목, 본문)
+3. 이미지 업로드 테스트
+4. 안티탐지 설정 검증
+
+### Phase 1: 발행 봇 기본
+1. Google Sheets 연동
+2. 발행큐 읽기/쓰기
+3. 로그인 → 글쓰기 → 발행 자동화
+4. 예외처리
+
+### Phase 2: 콘텐츠 생성기
+1. GUI 기본 틀
+2. AI 글 생성 연동
+3. 대량 생성 + 다양성 보장
+4. Google Sheets 저장
+
+### Phase 3: 고도화
+1. IP 관리 (USB 테더링 / 프록시)
+2. 텔레그램 알림
+3. 이미지 처리 (구글 드라이브 연동)
+
+---
+
+# ⚠️ 우선 작업: 로그인 + 글쓰기 테스트기
+
+## 목적
+본격적인 개발 전에 네이버 로그인과 글쓰기가 정상 작동하는지 검증
+
+## 테스트 항목
+1. Playwright + stealth로 봇 탐지 우회 가능한지
+2. 클립보드 붙여넣기로 로그인 되는지
+3. iframe 전환 후 에디터 조작 가능한지
+4. 글 발행까지 완료되는지
+
+## 테스트기 코드 위치
+`test/test_blog_login.py`
+
+## 테스트기 요구사항
+
+```python
+"""
+테스트기 요구사항:
+
+1. 실행하면 터미널에서 아이디/비밀번호 입력받기
+   - 또는 .env 파일에서 읽기
+
+2. Playwright + playwright-stealth로 브라우저 실행
+   - headless=False (눈으로 확인)
+   - 기획서 4.2의 안티봇탐지 설정 전부 적용
+
+3. 네이버 로그인
+   - 아이디 입력 (클립보드 붙여넣기)
+   - 비밀번호 입력 (클립보드 붙여넣기)
+   - 로그인 버튼 클릭
+   - 로그인 성공/실패 확인
+
+4. 글쓰기 페이지 이동
+   - page.frame() 또는 page.frame_locator()로 iframe 전환
+   - 팝업 닫기 (있으면)
+
+5. 테스트 글 작성
+   - 제목: "테스트 글 - {현재시간}"
+   - 본문: "이것은 테스트 글입니다."
+   - 발행 버튼 클릭
+   - 발행 확인 버튼 클릭
+
+6. 결과 출력
+   - 성공: 발행된 URL 출력
+   - 실패: 에러 메시지 출력
+
+7. 브라우저 종료 전 대기
+   - 사용자가 결과 확인할 수 있도록 input() 대기
+"""
+```
+
+## 테스트기 실행 방법
+
+```bash
+cd test
+python test_blog_login.py
+```
+
+## 테스트기 성공 기준
+- 로그인 성공
+- 글쓰기 페이지 접근 가능
+- 제목/본문 입력 가능
+- 발행 완료
+
+## 테스트기 실패 시 확인 사항
+- 캡차 발생 → 수동 처리 필요, IP 변경 검토
+- 요소 못 찾음 → 셀렉터 업데이트 필요
+- 로그인 차단 → 안티탐지 설정 강화 필요

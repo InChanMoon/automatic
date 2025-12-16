@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# 환경 설정 및 민감 정보
+config.json
+license.json
+credentials/
+cookies/
+*.env
+
+# IDE
+.vscode/
+.idea/
+
+# 테스트 및 임시 파일
+*.log
+*.tmp
+clipboard_output.html
+
+# OS
+.DS_Store
+Thumbs.db

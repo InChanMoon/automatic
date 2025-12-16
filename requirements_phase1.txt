@@ -1,0 +1,25 @@
+# Phase 1: Full system dependencies
+
+# Phase 0 dependencies
+playwright==1.41.0
+playwright-stealth==1.0.6
+pyperclip==1.8.2
+setuptools
+Pillow
+
+# Google API
+google-auth==2.27.0
+google-api-python-client==2.116.0
+
+# Gemini API
+google-generativeai==0.3.2
+
+# Claude API
+anthropic
+
+# Web Scraping (RSS 파싱용)
+requests
+
+# Install:
+# pip install -r requirements_phase1.txt
+# python -m playwright install chromium
