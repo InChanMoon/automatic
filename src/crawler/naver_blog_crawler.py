@@ -216,7 +216,7 @@ class NaverBlogCrawler:
 
             if comp_type == 'image':
                 image_count += 1
-                result.append(f'[이미지{image_count}]')
+                result.append(f'{{img:{image_count}}}')
 
             elif comp_type == 'text':
                 # 텍스트 추출
@@ -236,7 +236,50 @@ class NaverBlogCrawler:
                 if text.strip():
                     result.append(text)
 
+        # 연속 이미지 마커 압축
+        result = self._compress_image_markers(result)
+
         return '\n\n'.join(result)
+
+    def _compress_image_markers(self, items):
+        """연속된 이미지 마커를 압축 (예: {img:1} {img:2} {img:3} -> {img:1-3})"""
+        if not items:
+            return items
+
+        compressed = []
+        i = 0
+
+        while i < len(items):
+            item = items[i]
+
+            # 이미지 마커인지 확인
+            match = re.match(r'\{img:(\d+)\}', item)
+            if match:
+                start_num = int(match.group(1))
+                end_num = start_num
+
+                # 연속된 이미지 마커 찾기
+                j = i + 1
+                while j < len(items):
+                    next_match = re.match(r'\{img:(\d+)\}', items[j])
+                    if next_match and int(next_match.group(1)) == end_num + 1:
+                        end_num = int(next_match.group(1))
+                        j += 1
+                    else:
+                        break
+
+                # 압축된 마커 생성
+                if start_num == end_num:
+                    compressed.append(f'{{img:{start_num}}}')
+                else:
+                    compressed.append(f'{{img:{start_num}-{end_num}}}')
+
+                i = j
+            else:
+                compressed.append(item)
+                i += 1
+
+        return compressed
 
     def _extract_text_from_component(self, comp_html):
         """텍스트 컴포넌트에서 텍스트 추출"""

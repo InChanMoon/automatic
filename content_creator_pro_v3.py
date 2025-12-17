@@ -10,11 +10,12 @@ from tkinter import ttk, scrolledtext, messagebox, filedialog
 import threading
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+import calendar
 
 from src.sheets.license_manager import LicenseManager
 from src.sheets.content_manager_v2 import ContentManagerV2
-from src.content.multi_ai_generator import MultiAIGenerator
+from src.content.gemini_generator import GeminiGenerator
 from src.crawler.naver_blog_crawler import NaverBlogCrawler
 from src.utils.naver_html_generator import NaverHTMLGenerator
 
@@ -88,7 +89,7 @@ class ContentCreatorProV3:
         main_container.pack(fill='both', expand=True, padx=15, pady=15)
 
         # 왼쪽: 입력 영역
-        left_frame = tk.Frame(main_container, bg='#f5f5f5', width=580)
+        left_frame = tk.Frame(main_container, bg='#f5f5f5', width=500)
         left_frame.pack(side='left', fill='both', padx=(0, 10))
         left_frame.pack_propagate(False)
 
@@ -187,13 +188,13 @@ class ContentCreatorProV3:
         self.rss_keyword_entry = tk.Entry(rss_row, font=('맑은 고딕', 9), width=20)
         self.rss_keyword_entry.pack(side='left')
 
-        # 미리보기
-        tk.Label(main_frame, text="가져온 글:", bg='white',
+        # 미리보기 (편집 가능)
+        tk.Label(main_frame, text="가져온 글 (편집 가능):", bg='white',
                 font=('맑은 고딕', 9)).pack(anchor='w')
 
         self.url_preview = scrolledtext.ScrolledText(main_frame, height=6,
                                                      font=('맑은 고딕', 9),
-                                                     wrap='word', state='disabled')
+                                                     wrap='word')
         self.url_preview.pack(fill='x', pady=(3, 8))
 
         # 추가 지시사항
@@ -235,6 +236,61 @@ class ContentCreatorProV3:
         self.url_account_group_combo['values'] = ['(선택안함)']
         self.url_account_group_combo.set('(선택안함)')
         self.url_account_group_combo.pack(side='left', padx=(5, 0))
+
+        # 예약발행 옵션
+        schedule_frame = tk.LabelFrame(main_frame, text=" 예약발행 ", bg='white',
+                                       font=('맑은 고딕', 9), padx=8, pady=5)
+        schedule_frame.pack(fill='x', pady=(8, 8))
+
+        schedule_row1 = tk.Frame(schedule_frame, bg='white')
+        schedule_row1.pack(fill='x')
+
+        self.url_schedule_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(schedule_row1, text="예약발행", variable=self.url_schedule_var,
+                      bg='white', font=('맑은 고딕', 9),
+                      command=self.toggle_url_schedule).pack(side='left')
+
+        tk.Label(schedule_row1, text="시작:", bg='white', font=('맑은 고딕', 9)).pack(side='left', padx=(10, 3))
+        self.url_date_var = tk.StringVar()
+        self.url_date_combo = ttk.Combobox(schedule_row1, textvariable=self.url_date_var,
+                                           state='disabled', width=12, font=('맑은 고딕', 9))
+        self.url_date_combo.pack(side='left')
+
+        self.url_hour_var = tk.StringVar(value='09')
+        self.url_hour_combo = ttk.Combobox(schedule_row1, textvariable=self.url_hour_var,
+                                           state='disabled', width=4, font=('맑은 고딕', 9))
+        self.url_hour_combo['values'] = [f'{i:02d}' for i in range(24)]
+        self.url_hour_combo.pack(side='left', padx=(3, 0))
+
+        tk.Label(schedule_row1, text=":", bg='white', font=('맑은 고딕', 9)).pack(side='left')
+        self.url_minute_var = tk.StringVar(value='00')
+        self.url_minute_combo = ttk.Combobox(schedule_row1, textvariable=self.url_minute_var,
+                                             state='disabled', width=4, font=('맑은 고딕', 9))
+        self.url_minute_combo['values'] = [f'{i:02d}' for i in range(0, 60, 10)]
+        self.url_minute_combo.pack(side='left')
+
+        # 간격 설정
+        schedule_row2 = tk.Frame(schedule_frame, bg='white')
+        schedule_row2.pack(fill='x', pady=(5, 0))
+
+        tk.Label(schedule_row2, text="간격:", bg='white', font=('맑은 고딕', 9)).pack(side='left', padx=(85, 3))
+        self.url_interval_hour_var = tk.StringVar(value='2')
+        self.url_interval_hour_spin = tk.Spinbox(schedule_row2, from_=0, to=24, width=3,
+                                                  textvariable=self.url_interval_hour_var,
+                                                  font=('맑은 고딕', 9), state='disabled')
+        self.url_interval_hour_spin.pack(side='left')
+        tk.Label(schedule_row2, text="시간", bg='white', font=('맑은 고딕', 9)).pack(side='left', padx=(2, 5))
+
+        self.url_interval_min_var = tk.StringVar(value='30')
+        self.url_interval_min_spin = tk.Spinbox(schedule_row2, from_=0, to=50, width=3,
+                                                 textvariable=self.url_interval_min_var,
+                                                 font=('맑은 고딕', 9), state='disabled',
+                                                 increment=10)
+        self.url_interval_min_spin.pack(side='left')
+        tk.Label(schedule_row2, text="분", bg='white', font=('맑은 고딕', 9)).pack(side='left', padx=(2, 0))
+
+        # URL 탭 날짜/시간 콤보박스 초기화
+        self._init_url_date_combo()
 
         # 버튼
         btn_frame = tk.Frame(main_frame, bg='white')
@@ -324,23 +380,79 @@ class ContentCreatorProV3:
         img_row1.pack(fill='x')
 
         self.auto_image_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(img_row1, text="자동 생성", variable=self.auto_image_var,
+        tk.Checkbutton(img_row1, text="이미지 마커", variable=self.auto_image_var,
                       bg='white', font=('맑은 고딕', 9),
                       command=self.toggle_image_options).pack(side='left')
 
         tk.Label(img_row1, text="개수:", bg='white', font=('맑은 고딕', 9)).pack(side='left', padx=(10, 3))
-        self.image_count_var = tk.StringVar(value='3')
-        self.img_count_spinbox = tk.Spinbox(img_row1, from_=1, to=10, width=3,
+        self.image_count_var = tk.StringVar(value='5')
+        self.img_count_spinbox = tk.Spinbox(img_row1, from_=1, to=20, width=3,
                                            textvariable=self.image_count_var,
                                            font=('맑은 고딕', 9), state='disabled')
         self.img_count_spinbox.pack(side='left')
 
-        tk.Label(img_row1, text="위치:", bg='white', font=('맑은 고딕', 9)).pack(side='left', padx=(10, 3))
-        self.custom_image_pos = tk.Entry(img_row1, width=15, font=('맑은 고딕', 9), state='disabled')
-        self.custom_image_pos.pack(side='left')
+        self.image_position_var = tk.StringVar(value='top')
+        self.img_top_radio = tk.Radiobutton(img_row1, text="최상단 나열", variable=self.image_position_var,
+                                           value='top', bg='white', font=('맑은 고딕', 9), state='disabled')
+        self.img_top_radio.pack(side='left', padx=(10, 0))
+        self.img_auto_radio = tk.Radiobutton(img_row1, text="적절히", variable=self.image_position_var,
+                                            value='auto', bg='white', font=('맑은 고딕', 9), state='disabled')
+        self.img_auto_radio.pack(side='left', padx=(5, 0))
 
-        tk.Label(img_frame, text="예: [image01]=1개, [image01:05]=1~5번",
-                bg='white', fg='#888', font=('맑은 고딕', 8)).pack(anchor='w')
+        # 예약발행 옵션
+        schedule_frame2 = tk.LabelFrame(main_frame, text=" 예약발행 ", bg='white',
+                                        font=('맑은 고딕', 9), padx=8, pady=5)
+        schedule_frame2.pack(fill='x', pady=(0, 8))
+
+        schedule_row2_1 = tk.Frame(schedule_frame2, bg='white')
+        schedule_row2_1.pack(fill='x')
+
+        self.prompt_schedule_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(schedule_row2_1, text="예약발행", variable=self.prompt_schedule_var,
+                      bg='white', font=('맑은 고딕', 9),
+                      command=self.toggle_prompt_schedule).pack(side='left')
+
+        tk.Label(schedule_row2_1, text="시작:", bg='white', font=('맑은 고딕', 9)).pack(side='left', padx=(10, 3))
+        self.prompt_date_var = tk.StringVar()
+        self.prompt_date_combo = ttk.Combobox(schedule_row2_1, textvariable=self.prompt_date_var,
+                                              state='disabled', width=12, font=('맑은 고딕', 9))
+        self.prompt_date_combo.pack(side='left')
+
+        self.prompt_hour_var = tk.StringVar(value='09')
+        self.prompt_hour_combo = ttk.Combobox(schedule_row2_1, textvariable=self.prompt_hour_var,
+                                              state='disabled', width=4, font=('맑은 고딕', 9))
+        self.prompt_hour_combo['values'] = [f'{i:02d}' for i in range(24)]
+        self.prompt_hour_combo.pack(side='left', padx=(3, 0))
+
+        tk.Label(schedule_row2_1, text=":", bg='white', font=('맑은 고딕', 9)).pack(side='left')
+        self.prompt_minute_var = tk.StringVar(value='00')
+        self.prompt_minute_combo = ttk.Combobox(schedule_row2_1, textvariable=self.prompt_minute_var,
+                                                state='disabled', width=4, font=('맑은 고딕', 9))
+        self.prompt_minute_combo['values'] = [f'{i:02d}' for i in range(0, 60, 10)]
+        self.prompt_minute_combo.pack(side='left')
+
+        # 간격 설정
+        schedule_row2_2 = tk.Frame(schedule_frame2, bg='white')
+        schedule_row2_2.pack(fill='x', pady=(5, 0))
+
+        tk.Label(schedule_row2_2, text="간격:", bg='white', font=('맑은 고딕', 9)).pack(side='left', padx=(85, 3))
+        self.prompt_interval_hour_var = tk.StringVar(value='2')
+        self.prompt_interval_hour_spin = tk.Spinbox(schedule_row2_2, from_=0, to=24, width=3,
+                                                     textvariable=self.prompt_interval_hour_var,
+                                                     font=('맑은 고딕', 9), state='disabled')
+        self.prompt_interval_hour_spin.pack(side='left')
+        tk.Label(schedule_row2_2, text="시간", bg='white', font=('맑은 고딕', 9)).pack(side='left', padx=(2, 5))
+
+        self.prompt_interval_min_var = tk.StringVar(value='30')
+        self.prompt_interval_min_spin = tk.Spinbox(schedule_row2_2, from_=0, to=50, width=3,
+                                                    textvariable=self.prompt_interval_min_var,
+                                                    font=('맑은 고딕', 9), state='disabled',
+                                                    increment=10)
+        self.prompt_interval_min_spin.pack(side='left')
+        tk.Label(schedule_row2_2, text="분", bg='white', font=('맑은 고딕', 9)).pack(side='left', padx=(2, 0))
+
+        # 프롬프트 탭 날짜/시간 콤보박스 초기화
+        self._init_prompt_date_combo()
 
         # 버튼
         btn_frame = tk.Frame(main_frame, bg='white')
@@ -363,10 +475,177 @@ class ContentCreatorProV3:
         """이미지 옵션 활성화/비활성화"""
         if self.auto_image_var.get():
             self.img_count_spinbox.config(state='normal')
-            self.custom_image_pos.config(state='normal')
+            self.img_top_radio.config(state='normal')
+            self.img_auto_radio.config(state='normal')
         else:
             self.img_count_spinbox.config(state='disabled')
-            self.custom_image_pos.config(state='disabled')
+            self.img_top_radio.config(state='disabled')
+            self.img_auto_radio.config(state='disabled')
+
+    def _get_date_list(self):
+        """오늘부터 30일간의 날짜 리스트 생성"""
+        dates = []
+        today = datetime.now()
+        for i in range(30):
+            d = today + timedelta(days=i)
+            dates.append(d.strftime('%Y-%m-%d'))
+        return dates
+
+    def _get_rounded_time(self):
+        """
+        현재 시간을 10분 단위로 올림 처리
+
+        예: 16:23 -> 16:30, 23:55 -> 다음날 00:00
+
+        Returns:
+            tuple: (날짜 문자열, 시간 문자열, 분 문자열)
+        """
+        now = datetime.now()
+
+        # 현재 분을 10분 단위로 올림
+        current_min = now.minute
+        if current_min % 10 == 0:
+            # 이미 10분 단위면 그대로 (또는 10분 추가)
+            rounded_min = current_min + 10
+        else:
+            # 10분 단위로 올림
+            rounded_min = ((current_min // 10) + 1) * 10
+
+        # 시간 조정
+        extra_hours = rounded_min // 60
+        rounded_min = rounded_min % 60
+
+        rounded_time = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=extra_hours, minutes=rounded_min)
+
+        return (
+            rounded_time.strftime('%Y-%m-%d'),
+            rounded_time.strftime('%H'),
+            rounded_time.strftime('%M')
+        )
+
+    def _init_url_date_combo(self):
+        """URL 탭 날짜/시간 콤보박스 초기화"""
+        dates = self._get_date_list()
+        self.url_date_combo['values'] = dates
+
+        # 현재 시간 기준 10분 올림
+        rounded_date, rounded_hour, rounded_min = self._get_rounded_time()
+
+        # 날짜가 오늘이 아니면 (자정 넘김) 날짜 리스트에 추가
+        if rounded_date not in dates:
+            dates.insert(0, rounded_date)
+            self.url_date_combo['values'] = dates
+
+        self.url_date_combo.set(rounded_date)
+        self.url_hour_var.set(rounded_hour)
+        self.url_minute_var.set(rounded_min)
+
+    def _init_prompt_date_combo(self):
+        """프롬프트 탭 날짜/시간 콤보박스 초기화"""
+        dates = self._get_date_list()
+        self.prompt_date_combo['values'] = dates
+
+        # 현재 시간 기준 10분 올림
+        rounded_date, rounded_hour, rounded_min = self._get_rounded_time()
+
+        # 날짜가 오늘이 아니면 (자정 넘김) 날짜 리스트에 추가
+        if rounded_date not in dates:
+            dates.insert(0, rounded_date)
+            self.prompt_date_combo['values'] = dates
+
+        self.prompt_date_combo.set(rounded_date)
+        self.prompt_hour_var.set(rounded_hour)
+        self.prompt_minute_var.set(rounded_min)
+
+    def toggle_url_schedule(self):
+        """URL 탭 예약발행 토글"""
+        if self.url_schedule_var.get():
+            self.url_date_combo.config(state='readonly')
+            self.url_hour_combo.config(state='readonly')
+            self.url_minute_combo.config(state='readonly')
+            self.url_interval_hour_spin.config(state='normal')
+            self.url_interval_min_spin.config(state='normal')
+        else:
+            self.url_date_combo.config(state='disabled')
+            self.url_hour_combo.config(state='disabled')
+            self.url_minute_combo.config(state='disabled')
+            self.url_interval_hour_spin.config(state='disabled')
+            self.url_interval_min_spin.config(state='disabled')
+
+    def toggle_prompt_schedule(self):
+        """프롬프트 탭 예약발행 토글"""
+        if self.prompt_schedule_var.get():
+            self.prompt_date_combo.config(state='readonly')
+            self.prompt_hour_combo.config(state='readonly')
+            self.prompt_minute_combo.config(state='readonly')
+            self.prompt_interval_hour_spin.config(state='normal')
+            self.prompt_interval_min_spin.config(state='normal')
+        else:
+            self.prompt_date_combo.config(state='disabled')
+            self.prompt_hour_combo.config(state='disabled')
+            self.prompt_minute_combo.config(state='disabled')
+            self.prompt_interval_hour_spin.config(state='disabled')
+            self.prompt_interval_min_spin.config(state='disabled')
+
+    def get_url_scheduled_time(self, index=0):
+        """
+        URL 탭에서 예약발행 시간 가져오기
+
+        Args:
+            index: 콘텐츠 순번 (0부터 시작). 시작시간 + (간격 * index)
+
+        Returns:
+            str: '즉시발행' 또는 'YYYY-MM-DD HH:MM' 형식
+        """
+        if not self.url_schedule_var.get():
+            return '즉시발행'
+
+        date = self.url_date_var.get()
+        hour = int(self.url_hour_var.get())
+        minute = int(self.url_minute_var.get())
+
+        # 시작 시간 생성
+        start_time = datetime.strptime(f"{date} {hour:02d}:{minute:02d}", '%Y-%m-%d %H:%M')
+
+        # 간격 계산
+        interval_hours = int(self.url_interval_hour_var.get())
+        interval_mins = int(self.url_interval_min_var.get())
+        interval = timedelta(hours=interval_hours, minutes=interval_mins)
+
+        # 인덱스에 따른 시간 계산
+        scheduled = start_time + (interval * index)
+
+        return scheduled.strftime('%Y-%m-%d %H:%M')
+
+    def get_prompt_scheduled_time(self, index=0):
+        """
+        프롬프트 탭에서 예약발행 시간 가져오기
+
+        Args:
+            index: 콘텐츠 순번 (0부터 시작). 시작시간 + (간격 * index)
+
+        Returns:
+            str: '즉시발행' 또는 'YYYY-MM-DD HH:MM' 형식
+        """
+        if not self.prompt_schedule_var.get():
+            return '즉시발행'
+
+        date = self.prompt_date_var.get()
+        hour = int(self.prompt_hour_var.get())
+        minute = int(self.prompt_minute_var.get())
+
+        # 시작 시간 생성
+        start_time = datetime.strptime(f"{date} {hour:02d}:{minute:02d}", '%Y-%m-%d %H:%M')
+
+        # 간격 계산
+        interval_hours = int(self.prompt_interval_hour_var.get())
+        interval_mins = int(self.prompt_interval_min_var.get())
+        interval = timedelta(hours=interval_hours, minutes=interval_mins)
+
+        # 인덱스에 따른 시간 계산
+        scheduled = start_time + (interval * index)
+
+        return scheduled.strftime('%Y-%m-%d %H:%M')
 
     def create_content_management_section(self, parent):
         """콘텐츠 관리 섹션"""
@@ -392,7 +671,7 @@ class ContentCreatorProV3:
 
         self.status_filter = ttk.Combobox(filter_frame, values=['전체', '대기', '발행 중', '발행 완료'],
                                          state='readonly', width=10, font=('맑은 고딕', 9))
-        self.status_filter.set('전체')
+        self.status_filter.set('대기')  # 기본값: 대기
         self.status_filter.pack(side='left', padx=(5, 10))
         self.status_filter.bind('<<ComboboxSelected>>', lambda e: self.refresh_content_list())
 
@@ -408,6 +687,17 @@ class ContentCreatorProV3:
                  bg='#FFC107', fg='white', font=('맑은 고딕', 9, 'bold'),
                  relief='flat', cursor='hand2', padx=10).pack(side='right', padx=(0, 5))
 
+        # 상태 색상 범례
+        legend_frame = tk.Frame(filter_frame, bg='white')
+        legend_frame.pack(side='left', padx=(15, 0))
+
+        tk.Label(legend_frame, text="●", fg='#2196F3', bg='white', font=('맑은 고딕', 8)).pack(side='left')
+        tk.Label(legend_frame, text="대기", bg='white', font=('맑은 고딕', 8), fg='#666').pack(side='left', padx=(0, 8))
+        tk.Label(legend_frame, text="●", fg='#FF9800', bg='white', font=('맑은 고딕', 8)).pack(side='left')
+        tk.Label(legend_frame, text="발행중", bg='white', font=('맑은 고딕', 8), fg='#666').pack(side='left', padx=(0, 8))
+        tk.Label(legend_frame, text="●", fg='#4CAF50', bg='white', font=('맑은 고딕', 8)).pack(side='left')
+        tk.Label(legend_frame, text="완료", bg='white', font=('맑은 고딕', 8), fg='#666').pack(side='left')
+
         # 리스트
         list_frame = tk.Frame(parent, bg='white')
         list_frame.pack(fill='both', expand=True, padx=10, pady=(0, 10))
@@ -422,30 +712,42 @@ class ContentCreatorProV3:
         scrollbar_x = tk.Scrollbar(tree_container, orient='horizontal')
         scrollbar_x.pack(side='bottom', fill='x')
 
-        columns = ('ID', '키워드', '제목', '상태', 'AI모델', '생성일')
+        # 컬럼: 상태(색상), 그룹, 키워드, 제목, 예약시간, 발행시간, 보기, content_id(숨김)
+        columns = ('상태', '그룹', '키워드', '제목', '예약시간', '발행시간', '보기', 'content_id')
         self.content_tree = ttk.Treeview(tree_container, columns=columns, show='headings',
                                         yscrollcommand=scrollbar_y.set,
                                         xscrollcommand=scrollbar_x.set, height=20)
 
-        self.content_tree.heading('ID', text='ID')
+        self.content_tree.heading('상태', text='')
+        self.content_tree.heading('그룹', text='그룹')
         self.content_tree.heading('키워드', text='키워드')
         self.content_tree.heading('제목', text='제목')
-        self.content_tree.heading('상태', text='상태')
-        self.content_tree.heading('AI모델', text='AI모델')
-        self.content_tree.heading('생성일', text='생성일')
+        self.content_tree.heading('예약시간', text='예약시간')
+        self.content_tree.heading('발행시간', text='발행시간')
+        self.content_tree.heading('보기', text='보기')
+        self.content_tree.heading('content_id', text='')
 
-        self.content_tree.column('ID', width=150, minwidth=100)
-        self.content_tree.column('키워드', width=100, minwidth=80)
-        self.content_tree.column('제목', width=300, minwidth=150)
-        self.content_tree.column('상태', width=60, minwidth=50)
-        self.content_tree.column('AI모델', width=100, minwidth=80)
-        self.content_tree.column('생성일', width=120, minwidth=100)
+        self.content_tree.column('상태', width=25, minwidth=25, anchor='center')
+        self.content_tree.column('그룹', width=50, minwidth=40)
+        self.content_tree.column('키워드', width=80, minwidth=60)
+        self.content_tree.column('제목', width=200, minwidth=120)
+        self.content_tree.column('예약시간', width=110, minwidth=90)
+        self.content_tree.column('발행시간', width=110, minwidth=90)
+        self.content_tree.column('보기', width=40, minwidth=40, anchor='center')
+        self.content_tree.column('content_id', width=0, minwidth=0, stretch=False)
+
+        # 상태별 색상 태그 정의
+        self.content_tree.tag_configure('ready', foreground='#2196F3')
+        self.content_tree.tag_configure('publishing', foreground='#FF9800')
+        self.content_tree.tag_configure('published', foreground='#4CAF50')
+        self.content_tree.tag_configure('failed', foreground='#F44336')
 
         self.content_tree.pack(fill='both', expand=True)
         scrollbar_y.config(command=self.content_tree.yview)
         scrollbar_x.config(command=self.content_tree.xview)
 
         self.content_tree.bind('<Double-1>', lambda e: self.open_edit_tab())
+        self.content_tree.bind('<ButtonRelease-1>', self.on_tree_click)
 
     def create_edit_tab(self, parent):
         """원고 수정 탭"""
@@ -524,25 +826,26 @@ class ContentCreatorProV3:
     def add_single_marker(self):
         """단일 이미지 마커 추가"""
         num = int(self.single_marker_var.get())
-        marker = f"[image{num:02d}]"
+        marker = f"{{img:{num}}}"
         self.edit_content_text.insert('insert', marker)
 
     def add_range_marker(self):
         """연속 이미지 마커 추가"""
         s = int(self.range_start_var.get())
         e = int(self.range_end_var.get())
-        marker = f"[image{s:02d}:{e:02d}]"
+        marker = f"{{img:{s}-{e}}}"
         self.edit_content_text.insert('insert', marker)
 
     def remove_all_markers(self):
         """모든 이미지 마커 제거"""
         content = self.edit_content_text.get('1.0', 'end')
-        if not re.search(r'\[image\d+(?::\d+)?\]', content):
+        # {img:N} 또는 {img:N-M} 형식 검색
+        if not re.search(r'\{img:\d+(?:-\d+)?\}', content):
             self.show_info("제거할 이미지 마커가 없습니다")
             return
 
         if messagebox.askyesno("확인", "모든 이미지 마커를 제거하시겠습니까?"):
-            cleaned = re.sub(r'\[image\d+(?::\d+)?\]\s*', '', content)
+            cleaned = re.sub(r'\{img:\d+(?:-\d+)?\}\s*', '', content)
             self.edit_content_text.delete('1.0', 'end')
             self.edit_content_text.insert('1.0', cleaned.strip())
             self.show_success("이미지 마커가 제거되었습니다")
@@ -662,11 +965,9 @@ class ContentCreatorProV3:
                     result = self.crawler.parse_blog_post(post['link'])
                     content = f"[제목] {result['title']}\n\n{result['content_with_markers']}"
 
-                self.root.after(0, lambda: self.url_preview.config(state='normal'))
                 self.root.after(0, lambda: self.url_preview.delete('1.0', 'end'))
                 self.root.after(0, lambda: self.url_preview.insert('1.0', content))
-                self.root.after(0, lambda: self.url_preview.config(state='disabled'))
-                self.root.after(0, lambda: self.show_success("글 가져오기 완료!"))
+                self.root.after(0, lambda: self.show_success("글 가져오기 완료! (이미지 마커 수정 가능)"))
 
             except Exception as e:
                 self.root.after(0, lambda: self.show_error(f"가져오기 실패: {str(e)[:50]}"))
@@ -678,10 +979,10 @@ class ContentCreatorProV3:
         return f"""
 
 [중요 지시사항]
-1. 글자 수: {char_limit}자 내외로 작성해주세요.
-2. 서식 금지: 제목이나 본문에 절대로 **, ##, ###, # 같은 마크다운 서식을 사용하지 마세요.
-3. 글 자체를 읽기 좋게 자연스럽게 작성해주세요. 굵은 글씨나 헤더 대신 문단 구분으로 가독성을 높여주세요.
-4. 제목은 간결하고 명확하게, 본문은 자연스럽고 읽기 좋게 작성해주세요."""
+1. 글자 수: {char_limit}자 내외로 작성.
+2. 서식 금지: 제목이나 본문에 절대로 **, ##, ###, # 같은 마크다운 서식 사용 금지.
+3. 글 자체를 읽기 좋게 자연스럽게 작성. 굵은 글씨나 헤더 대신 문단 구분이나 테이블 형태의 표도 사용.
+4. 제목은 간결하고 명확하게 작성."""
 
     def start_url_generation(self):
         """URL 리라이팅 생성 시작"""
@@ -730,17 +1031,35 @@ class ContentCreatorProV3:
                 if self.stop_requested:
                     break
 
-                self.root.after(0, lambda idx=i, sc=success_count: self.show_working(
-                    f"[{idx+1}/{count}] {ai_name} 리라이팅 중... (성공: {sc}개)"
+                # 각 콘텐츠별 예약 시간 계산 (인덱스 기반)
+                scheduled_time = self.get_url_scheduled_time(index=i)
+
+                self.root.after(0, lambda idx=i, sc=success_count, st=scheduled_time: self.show_working(
+                    f"[{idx+1}/{count}] {ai_name} 리라이팅 중... (성공: {sc}개)" + (f" 예약: {st}" if st != '즉시발행' else "")
                 ))
 
                 try:
-                    generator = MultiAIGenerator(ai_type=ai_type)
+                    generator = GeminiGenerator()
 
                     if custom_prompt:
-                        full_prompt = f"{custom_prompt}\n\n(#{i+1}번째 글 - 이전과 다른 관점으로){self.get_ai_instruction_suffix()}"
+                        # 추가 지시사항이 있으면 base_prompt 대체
+                        full_prompt = f"""{custom_prompt}
+{{img:숫자}}가 적힌 부분은 그대로 유지해야해.
+(#{i+1}번째 글 - 이전과 다른 관점으로)
+
+[중요 지시사항]
+1. 서식 금지: 제목이나 본문에 절대로 **, ##, ###, # 같은 마크다운 서식 사용 금지.
+2. 글 자체를 읽기 좋게 자연스럽게 작성. 굵은 글씨나 헤더 대신 문단 구분이나 테이블 형태의 표도 사용.
+3. 제목은 간결하고 명확하게 작성."""
                     else:
-                        full_prompt = f"전문적이고 신뢰감 있는 말투로 리라이팅해주세요.\n(#{i+1}번째 글){self.get_ai_instruction_suffix()}"
+                        # 기본 프롬프트 (글자수 제한 없음)
+                        full_prompt = f"""글을 제공할건데, 글의 문단 및 구조는 비교하기 쉽게 그대로 제공해주고, 글의 말투 어미를 동일하게 바꾸는데, 조금 길게 바꿔주고, 조사도 중간중간 많이 바꿔줘. {{img:숫자}}가 적힌 부분은 그대로 유지해야해.
+(#{i+1}번째 글)
+
+[중요 지시사항]
+1. 서식 금지: 제목이나 본문에 절대로 **, ##, ###, # 같은 마크다운 서식 사용 금지.
+2. 글 자체를 읽기 좋게 자연스럽게 작성. 굵은 글씨나 헤더 대신 문단 구분이나 테이블 형태의 표도 사용.
+3. 제목은 간결하고 명확하게 작성."""
 
                     result = generator.generate_with_custom_prompt(
                         user_prompt=full_prompt,
@@ -752,8 +1071,8 @@ class ContentCreatorProV3:
                         title=result['title'],
                         content=result['content'],
                         license_key=self.current_license['license_key'],
-                        ai_model=ai_name,
-                        account_group=account_group
+                        account_group=account_group,
+                        scheduled_time=scheduled_time
                     )
 
                     self.license_mgr.increment_api_usage(self.current_license['license_key'])
@@ -803,7 +1122,7 @@ class ContentCreatorProV3:
 
         auto_image = self.auto_image_var.get()
         image_count = int(self.image_count_var.get()) if auto_image else 0
-        custom_image_pos = self.custom_image_pos.get().strip() if auto_image else ""
+        image_position = self.image_position_var.get() if auto_image else ""  # 'top' or 'auto'
         account_group = self.prompt_account_group_var.get()
         if account_group == '(선택안함)':
             self.show_error("계정그룹을 선택하세요")
@@ -827,19 +1146,20 @@ class ContentCreatorProV3:
                     ))
                     break
 
-                self.root.after(0, lambda idx=i, sc=success_count: self.show_working(
-                    f"[{idx+1}/{count}] {ai_name} 글 생성 중... (성공: {sc}개)"
+                # 각 콘텐츠별 예약 시간 계산 (인덱스 기반)
+                scheduled_time = self.get_prompt_scheduled_time(index=i)
+
+                self.root.after(0, lambda idx=i, sc=success_count, st=scheduled_time: self.show_working(
+                    f"[{idx+1}/{count}] {ai_name} 글 생성 중... (성공: {sc}개)" + (f" 예약: {st}" if st != '즉시발행' else "")
                 ))
 
                 try:
-                    generator = MultiAIGenerator(ai_type=ai_type)
+                    generator = GeminiGenerator()
 
                     image_instruction = ""
-                    if auto_image:
-                        if custom_image_pos:
-                            image_instruction = f"\n\n이미지 마커 위치: {custom_image_pos} 형식으로 본문에 이미지 마커를 넣어주세요."
-                        else:
-                            image_instruction = f"\n\n본문 중간중간에 [image01], [image02] 형식으로 {image_count}개의 이미지 마커를 적절히 배치해주세요."
+                    if auto_image and image_position == 'auto':
+                        # 적절히: AI에게 위치 결정 맡김
+                        image_instruction = f"\n\n본문에 어울리게 이미지 위치를 {{img:1}}, {{img:2}} 형식으로 최대 {image_count}개로 넣어줘."
 
                     full_prompt = f"{prompt}\n\n(#{i+1}번째 글 - 이전과 다른 관점, 다른 구성으로){self.get_ai_instruction_suffix(char_limit)}{image_instruction}"
 
@@ -848,13 +1168,18 @@ class ContentCreatorProV3:
                         original_text=None
                     )
 
+                    # 최상단 나열: 본문 맨 앞에 이미지 마커 삽입
+                    content = result['content']
+                    if auto_image and image_position == 'top':
+                        content = f"{{img:1-{image_count}}}\n\n{content}"
+
                     self.content_mgr.add_content(
                         keyword=keyword,
                         title=result['title'],
-                        content=result['content'],
+                        content=content,
                         license_key=self.current_license['license_key'],
-                        ai_model=ai_name,
-                        account_group=account_group
+                        account_group=account_group,
+                        scheduled_time=scheduled_time
                     )
 
                     self.license_mgr.increment_api_usage(self.current_license['license_key'])
@@ -909,7 +1234,7 @@ class ContentCreatorProV3:
             return
 
         item = self.content_tree.item(selected[0])
-        content_id = item['values'][0] if item['values'] else None
+        content_id = item['values'][7] if item['values'] and len(item['values']) > 7 else None
 
         if not content_id:
             self.show_error("콘텐츠 ID를 찾을 수 없습니다")
@@ -1012,27 +1337,72 @@ class ContentCreatorProV3:
                 if filter_status and content['status'] != filter_status:
                     continue
 
-                status_kr = {
-                    'ready': '대기',
-                    'publishing': '발행 중',
-                    'published': '완료'
-                }.get(content['status'], content['status'])
+                status = content['status']
 
-                created_time = content['created_time']
-                if len(created_time) > 16:
-                    created_time = created_time[:16]
+                # 상태 아이콘 (●)
+                status_icon = '●'
+
+                # 예약시간 표시
+                scheduled = content.get('scheduled_time', '즉시발행')
+
+                # 발행시간 표시 (published 상태에서만)
+                published_time = ''
+                if status == 'published' and content.get('published_time'):
+                    published_time = content['published_time']
+                    if len(published_time) > 16:
+                        published_time = published_time[:16]
+
+                # 발행글 링크 버튼 (published 상태에서만 '보기' 표시)
+                view_btn = '보기' if status == 'published' and content.get('published_url') else ''
 
                 self.content_tree.insert('', 0, values=(
-                    content['content_id'],
+                    status_icon,
+                    content.get('account_group', ''),
                     content['keyword'],
-                    content['title'][:45] + '...' if len(content['title']) > 45 else content['title'],
-                    status_kr,
-                    content.get('ai_model', ''),
-                    created_time
-                ))
+                    content['title'][:35] + '...' if len(content['title']) > 35 else content['title'],
+                    scheduled,
+                    published_time,
+                    view_btn,
+                    content['content_id']  # 숨김 컬럼
+                ), tags=(status,))
 
         except Exception as e:
             print(f"❌ 콘텐츠 목록 새로고침 실패: {e}")
+
+    def on_tree_click(self, event):
+        """트리뷰 클릭 이벤트 - 발행글 보기 버튼 처리"""
+        region = self.content_tree.identify_region(event.x, event.y)
+        if region != 'cell':
+            return
+
+        column = self.content_tree.identify_column(event.x)
+        item = self.content_tree.identify_row(event.y)
+
+        if not item:
+            return
+
+        # 보기 컬럼 클릭 (#7 = 7번째 컬럼)
+        if column == '#7':
+            values = self.content_tree.item(item, 'values')
+            if values and values[6] == '보기':
+                content_id = values[7]  # 숨김 컬럼에서 ID 가져오기
+                self._open_published_url(content_id)
+
+    def _open_published_url(self, content_id):
+        """발행된 글 URL 열기"""
+        if not self.current_license:
+            return
+
+        content_data = self.content_mgr.get_content_by_id(
+            content_id,
+            license_key=self.current_license['license_key']
+        )
+
+        if content_data and content_data.get('published_url'):
+            import webbrowser
+            webbrowser.open(content_data['published_url'])
+        else:
+            self.show_info("발행 URL이 없습니다")
 
     def delete_content(self):
         """콘텐츠 삭제"""
@@ -1049,7 +1419,7 @@ class ContentCreatorProV3:
             return
 
         item = self.content_tree.item(selected[0])
-        content_id = item['values'][0] if item['values'] else None
+        content_id = item['values'][7] if item['values'] and len(item['values']) > 7 else None
 
         if not content_id:
             self.show_error("콘텐츠 ID를 찾을 수 없습니다")

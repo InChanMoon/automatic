@@ -14,20 +14,18 @@ from .base import SheetsBase
 class ContentManagerV3(SheetsBase):
     """발행봇용 콘텐츠 관리자"""
 
-    # 컬럼 인덱스 (0-based)
-    COL_CONTENT_ID = 0      # A: content_id
-    COL_KEYWORD = 1         # B: keyword
-    COL_TITLE = 2           # C: title
-    COL_CONTENT = 3         # D: content
-    COL_STATUS = 4          # E: status (ready/publishing/published/failed)
-    COL_CREATED_TIME = 5    # F: created_time
-    COL_CUSTOM_PROMPT = 6   # G: custom_prompt
-    COL_IMAGE_POSITIONS = 7 # H: image_positions
-    COL_AI_MODEL = 8        # I: ai_model
-    COL_ACCOUNT_GROUP = 9   # J: account_group
-    COL_PUBLISHED_URL = 10  # K: published_url (발행된 URL)
-    COL_PUBLISHED_TIME = 11 # L: published_time (발행 시간)
-    COL_PUBLISHED_ACCOUNT = 12  # M: published_account (발행 계정)
+    # 컬럼 인덱스 (0-based) - 새 구조 (마이그레이션 완료)
+    COL_ACCOUNT_GROUP = 0       # A: account_group
+    COL_KEYWORD = 1             # B: keyword
+    COL_TITLE = 2               # C: title
+    COL_CONTENT = 3             # D: content
+    COL_CREATED_TIME = 4        # E: created_time
+    COL_PUBLISHED_URL = 5       # F: published_url
+    COL_PUBLISHED_TIME = 6      # G: published_time
+    COL_PUBLISHED_ACCOUNT = 7   # H: published_account
+    COL_CONTENT_ID = 8          # I: content_id
+    COL_STATUS = 9              # J: status
+    COL_SCHEDULED_TIME = 10     # K: scheduled_time (예약발행 시간)
 
     # 상태값
     STATUS_READY = 'ready'           # 발행 대기
@@ -64,31 +62,33 @@ class ContentManagerV3(SheetsBase):
 
         for sheet_name in content_sheets:
             try:
-                values = self.read_range(f'{sheet_name}!A:J')
+                values = self.read_range(f'{sheet_name}!A:K')  # A~K열 (11개 컬럼)
                 if len(values) <= 1:
                     continue
 
                 for i in range(1, len(values)):
                     row = values[i]
-                    if len(row) < 10:
+                    # 최소 1개 컬럼
+                    if len(row) < 1:
                         continue
 
-                    # account_group과 status 확인
+                    # account_group(A열)과 status(J열) 확인
                     row_group = row[self.COL_ACCOUNT_GROUP] if len(row) > self.COL_ACCOUNT_GROUP else ''
                     row_status = row[self.COL_STATUS] if len(row) > self.COL_STATUS else ''
 
                     if row_group == account_group and row_status == self.STATUS_READY:
                         contents.append({
-                            'content_id': row[self.COL_CONTENT_ID],
+                            'account_group': row_group,
                             'keyword': row[self.COL_KEYWORD] if len(row) > self.COL_KEYWORD else '',
                             'title': row[self.COL_TITLE] if len(row) > self.COL_TITLE else '',
                             'content': row[self.COL_CONTENT] if len(row) > self.COL_CONTENT else '',
-                            'status': row_status,
                             'created_time': row[self.COL_CREATED_TIME] if len(row) > self.COL_CREATED_TIME else '',
-                            'custom_prompt': row[self.COL_CUSTOM_PROMPT] if len(row) > self.COL_CUSTOM_PROMPT else '',
-                            'image_positions': row[self.COL_IMAGE_POSITIONS] if len(row) > self.COL_IMAGE_POSITIONS else '[]',
-                            'ai_model': row[self.COL_AI_MODEL] if len(row) > self.COL_AI_MODEL else '',
-                            'account_group': row_group,
+                            'published_url': row[self.COL_PUBLISHED_URL] if len(row) > self.COL_PUBLISHED_URL else '',
+                            'published_time': row[self.COL_PUBLISHED_TIME] if len(row) > self.COL_PUBLISHED_TIME else '',
+                            'published_account': row[self.COL_PUBLISHED_ACCOUNT] if len(row) > self.COL_PUBLISHED_ACCOUNT else '',
+                            'content_id': row[self.COL_CONTENT_ID] if len(row) > self.COL_CONTENT_ID else '',
+                            'status': row_status,
+                            'scheduled_time': row[self.COL_SCHEDULED_TIME] if len(row) > self.COL_SCHEDULED_TIME else '즉시발행',
                             'row_num': i + 1,
                             'sheet_name': sheet_name
                         })
@@ -198,13 +198,13 @@ class ContentManagerV3(SheetsBase):
 
         for sheet_name in content_sheets:
             try:
-                values = self.read_range(f'{sheet_name}!A:J')
+                values = self.read_range(f'{sheet_name}!A:J')  # A~J열
                 if len(values) <= 1:
                     continue
 
                 for i in range(1, len(values)):
                     row = values[i]
-                    if len(row) < 5:
+                    if len(row) < 1:
                         continue
 
                     status = row[self.COL_STATUS] if len(row) > self.COL_STATUS else ''
@@ -238,24 +238,26 @@ class ContentManagerV3(SheetsBase):
 
         for sheet_name in content_sheets:
             try:
-                values = self.read_range(f'{sheet_name}!A:J')
+                values = self.read_range(f'{sheet_name}!A:J')  # A~J열
                 if len(values) <= 1:
                     continue
 
                 for i in range(1, len(values)):
                     row = values[i]
-                    if len(row) > 0 and row[0] == content_id:
+                    # content_id는 I열(인덱스 8)
+                    row_content_id = row[self.COL_CONTENT_ID] if len(row) > self.COL_CONTENT_ID else ''
+                    if row_content_id == content_id:
                         return {
-                            'content_id': row[self.COL_CONTENT_ID],
+                            'account_group': row[self.COL_ACCOUNT_GROUP] if len(row) > self.COL_ACCOUNT_GROUP else '',
                             'keyword': row[self.COL_KEYWORD] if len(row) > self.COL_KEYWORD else '',
                             'title': row[self.COL_TITLE] if len(row) > self.COL_TITLE else '',
                             'content': row[self.COL_CONTENT] if len(row) > self.COL_CONTENT else '',
-                            'status': row[self.COL_STATUS] if len(row) > self.COL_STATUS else '',
                             'created_time': row[self.COL_CREATED_TIME] if len(row) > self.COL_CREATED_TIME else '',
-                            'custom_prompt': row[self.COL_CUSTOM_PROMPT] if len(row) > self.COL_CUSTOM_PROMPT else '',
-                            'image_positions': row[self.COL_IMAGE_POSITIONS] if len(row) > self.COL_IMAGE_POSITIONS else '[]',
-                            'ai_model': row[self.COL_AI_MODEL] if len(row) > self.COL_AI_MODEL else '',
-                            'account_group': row[self.COL_ACCOUNT_GROUP] if len(row) > self.COL_ACCOUNT_GROUP else '',
+                            'published_url': row[self.COL_PUBLISHED_URL] if len(row) > self.COL_PUBLISHED_URL else '',
+                            'published_time': row[self.COL_PUBLISHED_TIME] if len(row) > self.COL_PUBLISHED_TIME else '',
+                            'published_account': row[self.COL_PUBLISHED_ACCOUNT] if len(row) > self.COL_PUBLISHED_ACCOUNT else '',
+                            'content_id': row_content_id,
+                            'status': row[self.COL_STATUS] if len(row) > self.COL_STATUS else '',
                             'row_num': i + 1,
                             'sheet_name': sheet_name
                         }

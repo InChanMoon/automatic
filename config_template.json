@@ -1,8 +1,6 @@
 {
   "google_drive": {
-    "root_folder_id": "YOUR_DRIVE_FOLDER_ID",
-    "delete_after_use": false,
-    "move_to_used": true
+    "image_root_folder_id": "YOUR_DRIVE_IMAGE_ROOT_FOLDER_ID"
   },
   "gemini_api": {
     "api_key": "YOUR_GEMINI_API_KEY"

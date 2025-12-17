@@ -161,11 +161,11 @@ class ClaudeGenerator:
             dict
         """
         templates = {
-            'default': f"{keyword}를 설명하는 글을 1000자 내외로 써줘",
-            'pros_cons': f"{keyword}의 장단점을 1000자 내외로 써줘. 장점 3개, 단점 3개 형식으로",
-            'seo': f"{keyword}를 설명하는 SEO 용도의 글을 1000자 내외로 작성해줘. 키워드를 자연스럽게 여러 번 포함",
-            'with_subtitles': f"{keyword}를 설명하는 글을 소제목 있는 형태로 1000자 내외로 써줘. 소제목은 ### 사용",
-            'guide': f"{keyword} 완벽 가이드를 1000자 내외로 작성해줘. 초보자도 이해하기 쉽게"
+            'default': f"{keyword}를 설명하는 글을 1000자 내외로 써줘. 이미지 삽입 위치에 {{img:1-3}} 형식 마커를 2-4개 배치해줘",
+            'pros_cons': f"{keyword}의 장단점을 1000자 내외로 써줘. 장점 3개, 단점 3개 형식으로. 이미지 삽입 위치에 {{img:1-3}} 형식 마커를 2-4개 배치해줘",
+            'seo': f"{keyword}를 설명하는 SEO 용도의 글을 1000자 내외로 작성해줘. 키워드를 자연스럽게 여러 번 포함. 이미지 삽입 위치에 {{img:1-3}} 형식 마커를 2-4개 배치해줘",
+            'with_subtitles': f"{keyword}를 설명하는 글을 소제목 있는 형태로 1000자 내외로 써줘. 소제목은 ### 사용. 이미지 삽입 위치에 {{img:1-3}} 형식 마커를 2-4개 배치해줘",
+            'guide': f"{keyword} 완벽 가이드를 1000자 내외로 작성해줘. 초보자도 이해하기 쉽게. 이미지 삽입 위치에 {{img:1-3}} 형식 마커를 2-4개 배치해줘"
         }
 
         user_prompt = templates.get(template_type, templates['default'])

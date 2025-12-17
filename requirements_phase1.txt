@@ -7,6 +7,9 @@ pyperclip==1.8.2
 setuptools
 Pillow
 
+# Windows clipboard image support
+pywin32; sys_platform == "win32"
+
 # Google API
 google-auth==2.27.0
 google-api-python-client==2.116.0

@@ -4,7 +4,12 @@
       "Bash(mkdir:*)",
       "Bash(python:*)",
       "Bash(pip install:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\n네이버 블로그 자동화 시스템 초기 커밋\n\n주요 기능:\n- 콘텐츠 생성기 (content_creator_pro_v3.py): AI 기반 블로그 원고 생성\n- 발행봇 (publisher_bot.py): 그룹별 자동 발행 관리\n- Google Sheets 연동: 콘텐츠/계정/설정 관리\n- 라이선스 시스템: 사용량 제한 관리\n\n모듈 구성:\n- src/sheets: Google Sheets 관리 (콘텐츠, 계정, 발행설정)\n- src/content: AI 콘텐츠 생성 (Gemini, Claude)\n- src/publisher: 네이버 블로그 자동 발행\n- src/crawler: 네이버 블로그 크롤러\n- setup: 스프레드시트 구조 설정 스크립트\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git config:*)",
+      "Bash(git push:*)",
+      "Bash(.venvScriptspip install google-auth google-api-python-client)",
+      "Bash(cat:*)"
     ]
   }
 }

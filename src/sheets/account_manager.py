@@ -118,6 +118,25 @@ class AccountManager(SheetsBase):
 
         return available[0]
 
+    def get_account_by_id(self, group_name, account_id):
+        """
+        계정 ID로 특정 계정 정보 가져오기
+
+        Args:
+            group_name: 그룹명
+            account_id: 계정 ID
+
+        Returns:
+            dict or None: 계정 정보
+        """
+        accounts = self.get_accounts_by_group(group_name, active_only=False)
+
+        for acc in accounts:
+            if acc['account_id'] == account_id:
+                return acc
+
+        return None
+
     def increment_usage(self, group_name, account_id):
         """
         계정 사용 카운트 증가

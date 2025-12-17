@@ -2,10 +2,11 @@
 발행 설정 관리자 - PublishSettingsManager
 
 그룹별 발행 설정 관리:
-- 발행 간격 (초)
-- 일일 최대 발행 수
-- 발행 활성화/비활성화
-- 발행 시간대 설정
+- 발행대기 콘텐츠 수
+- 활성 계정
+- 오늘 발행 수
+- 계정당 발행 수
+- 잠금 상태 (동시성 제어)
 """
 
 import json
@@ -19,22 +20,19 @@ class PublishSettingsManager(SheetsBase):
     SHEET_NAME = '발행설정'
 
     # 컬럼 인덱스 (0-based)
-    COL_GROUP_NAME = 0       # A: group_name (그룹명)
-    COL_ENABLED = 1          # B: enabled (활성화 여부)
-    COL_INTERVAL_MIN = 2     # C: interval_min (최소 발행 간격, 초)
-    COL_INTERVAL_MAX = 3     # D: interval_max (최대 발행 간격, 초)
-    COL_DAILY_LIMIT = 4      # E: daily_limit (그룹 일일 최대 발행)
-    COL_TODAY_COUNT = 5      # F: today_count (오늘 발행 수)
-    COL_START_HOUR = 6       # G: start_hour (발행 시작 시간)
-    COL_END_HOUR = 7         # H: end_hour (발행 종료 시간)
-    COL_LAST_PUBLISH = 8     # I: last_publish (마지막 발행 시간)
-    COL_MEMO = 9             # J: memo
+    COL_GROUP_NAME = 0       # A: 그룹명
+    COL_PENDING_COUNT = 1    # B: 발행대기 (대기 콘텐츠 수)
+    COL_ACCOUNT = 2          # C: 계정 (활성 계정)
+    COL_TODAY_COUNT = 3      # D: 오늘 발행 (오늘 발행 수)
+    COL_POSTS_PER_ACCOUNT = 4  # E: 계정당 발행 수
+    COL_ACCOUNT_POST_COUNT = 5  # F: 현재 계정 발행 수 (내부용)
+    COL_LOCK_STATUS = 6      # G: 잠금 상태 (동시성 제어)
+    COL_LOCK_TIME = 7        # H: 잠금 시간
 
     # 헤더
     HEADERS = [
-        'group_name', 'enabled', 'interval_min', 'interval_max',
-        'daily_limit', 'today_count', 'start_hour', 'end_hour',
-        'last_publish', 'memo'
+        '그룹', '발행대기', '계정', '오늘발행',
+        '계정당발행수', '현재계정발행수', '잠금상태', '잠금시간'
     ]
 
     def __init__(self):
@@ -45,7 +43,7 @@ class PublishSettingsManager(SheetsBase):
     def _ensure_sheet(self):
         """설정 시트가 없으면 생성"""
         try:
-            self.read_range(f'{self.SHEET_NAME}!A1:J1')
+            self.read_range(f'{self.SHEET_NAME}!A1:H1')
         except Exception:
             # 시트 생성
             try:
@@ -62,7 +60,7 @@ class PublishSettingsManager(SheetsBase):
                 ).execute()
 
                 # 헤더 추가
-                self.write_range(f'{self.SHEET_NAME}!A1:J1', [self.HEADERS])
+                self.write_range(f'{self.SHEET_NAME}!A1:H1', [self.HEADERS])
                 print(f"[OK] '{self.SHEET_NAME}' 시트 생성 완료")
             except Exception as e:
                 print(f"[!] 설정 시트 생성 실패: {e}")
@@ -78,7 +76,7 @@ class PublishSettingsManager(SheetsBase):
             dict or None: 설정 정보
         """
         try:
-            values = self.read_range(f'{self.SHEET_NAME}!A:J')
+            values = self.read_range(f'{self.SHEET_NAME}!A:H')
         except Exception:
             return None
 
@@ -90,15 +88,13 @@ class PublishSettingsManager(SheetsBase):
             if len(row) > 0 and row[0] == group_name:
                 return {
                     'group_name': group_name,
-                    'enabled': row[self.COL_ENABLED].upper() == 'TRUE' if len(row) > self.COL_ENABLED else False,
-                    'interval_min': int(row[self.COL_INTERVAL_MIN]) if len(row) > self.COL_INTERVAL_MIN and row[self.COL_INTERVAL_MIN] else 300,
-                    'interval_max': int(row[self.COL_INTERVAL_MAX]) if len(row) > self.COL_INTERVAL_MAX and row[self.COL_INTERVAL_MAX] else 600,
-                    'daily_limit': int(row[self.COL_DAILY_LIMIT]) if len(row) > self.COL_DAILY_LIMIT and row[self.COL_DAILY_LIMIT] else 100,
+                    'pending_count': int(row[self.COL_PENDING_COUNT]) if len(row) > self.COL_PENDING_COUNT and row[self.COL_PENDING_COUNT] else 0,
+                    'account': row[self.COL_ACCOUNT] if len(row) > self.COL_ACCOUNT else '',
                     'today_count': int(row[self.COL_TODAY_COUNT]) if len(row) > self.COL_TODAY_COUNT and row[self.COL_TODAY_COUNT] else 0,
-                    'start_hour': int(row[self.COL_START_HOUR]) if len(row) > self.COL_START_HOUR and row[self.COL_START_HOUR] else 0,
-                    'end_hour': int(row[self.COL_END_HOUR]) if len(row) > self.COL_END_HOUR and row[self.COL_END_HOUR] else 24,
-                    'last_publish': row[self.COL_LAST_PUBLISH] if len(row) > self.COL_LAST_PUBLISH else '',
-                    'memo': row[self.COL_MEMO] if len(row) > self.COL_MEMO else '',
+                    'posts_per_account': int(row[self.COL_POSTS_PER_ACCOUNT]) if len(row) > self.COL_POSTS_PER_ACCOUNT and row[self.COL_POSTS_PER_ACCOUNT] else 5,
+                    'account_post_count': int(row[self.COL_ACCOUNT_POST_COUNT]) if len(row) > self.COL_ACCOUNT_POST_COUNT and row[self.COL_ACCOUNT_POST_COUNT] else 0,
+                    'lock_status': row[self.COL_LOCK_STATUS] if len(row) > self.COL_LOCK_STATUS else '',
+                    'lock_time': row[self.COL_LOCK_TIME] if len(row) > self.COL_LOCK_TIME else '',
                     'row_num': i + 1
                 }
 
@@ -112,7 +108,7 @@ class PublishSettingsManager(SheetsBase):
             dict: {group_name: setting}
         """
         try:
-            values = self.read_range(f'{self.SHEET_NAME}!A:J')
+            values = self.read_range(f'{self.SHEET_NAME}!A:H')
         except Exception:
             return {}
 
@@ -126,33 +122,25 @@ class PublishSettingsManager(SheetsBase):
                 group_name = row[0]
                 settings[group_name] = {
                     'group_name': group_name,
-                    'enabled': row[self.COL_ENABLED].upper() == 'TRUE' if len(row) > self.COL_ENABLED else False,
-                    'interval_min': int(row[self.COL_INTERVAL_MIN]) if len(row) > self.COL_INTERVAL_MIN and row[self.COL_INTERVAL_MIN] else 300,
-                    'interval_max': int(row[self.COL_INTERVAL_MAX]) if len(row) > self.COL_INTERVAL_MAX and row[self.COL_INTERVAL_MAX] else 600,
-                    'daily_limit': int(row[self.COL_DAILY_LIMIT]) if len(row) > self.COL_DAILY_LIMIT and row[self.COL_DAILY_LIMIT] else 100,
+                    'pending_count': int(row[self.COL_PENDING_COUNT]) if len(row) > self.COL_PENDING_COUNT and row[self.COL_PENDING_COUNT] else 0,
+                    'account': row[self.COL_ACCOUNT] if len(row) > self.COL_ACCOUNT else '',
                     'today_count': int(row[self.COL_TODAY_COUNT]) if len(row) > self.COL_TODAY_COUNT and row[self.COL_TODAY_COUNT] else 0,
-                    'start_hour': int(row[self.COL_START_HOUR]) if len(row) > self.COL_START_HOUR and row[self.COL_START_HOUR] else 0,
-                    'end_hour': int(row[self.COL_END_HOUR]) if len(row) > self.COL_END_HOUR and row[self.COL_END_HOUR] else 24,
-                    'last_publish': row[self.COL_LAST_PUBLISH] if len(row) > self.COL_LAST_PUBLISH else '',
-                    'memo': row[self.COL_MEMO] if len(row) > self.COL_MEMO else '',
+                    'posts_per_account': int(row[self.COL_POSTS_PER_ACCOUNT]) if len(row) > self.COL_POSTS_PER_ACCOUNT and row[self.COL_POSTS_PER_ACCOUNT] else 5,
+                    'account_post_count': int(row[self.COL_ACCOUNT_POST_COUNT]) if len(row) > self.COL_ACCOUNT_POST_COUNT and row[self.COL_ACCOUNT_POST_COUNT] else 0,
+                    'lock_status': row[self.COL_LOCK_STATUS] if len(row) > self.COL_LOCK_STATUS else '',
+                    'lock_time': row[self.COL_LOCK_TIME] if len(row) > self.COL_LOCK_TIME else '',
                     'row_num': i + 1
                 }
 
         return settings
 
-    def create_setting(self, group_name, interval_min=300, interval_max=600,
-                       daily_limit=100, start_hour=0, end_hour=24, memo=''):
+    def create_setting(self, group_name, posts_per_account=5):
         """
         새 그룹 발행 설정 생성
 
         Args:
             group_name: 그룹명
-            interval_min: 최소 발행 간격 (초)
-            interval_max: 최대 발행 간격 (초)
-            daily_limit: 일일 최대 발행 수
-            start_hour: 발행 시작 시간 (0-23)
-            end_hour: 발행 종료 시간 (1-24)
-            memo: 메모
+            posts_per_account: 계정당 발행 수 (기본값: 5)
 
         Returns:
             bool: 성공 여부
@@ -165,15 +153,13 @@ class PublishSettingsManager(SheetsBase):
 
         new_row = [
             group_name,
-            'TRUE',  # enabled
-            str(interval_min),
-            str(interval_max),
-            str(daily_limit),
+            '0',  # pending_count (콘텐츠 매니저에서 업데이트)
+            '',   # account (자동 설정)
             '0',  # today_count
-            str(start_hour),
-            str(end_hour),
-            '',  # last_publish
-            memo
+            str(posts_per_account),
+            '0',  # account_post_count
+            '',   # lock_status
+            ''    # lock_time
         ]
 
         try:
@@ -190,13 +176,13 @@ class PublishSettingsManager(SheetsBase):
         Args:
             group_name: 그룹명
             **kwargs: 업데이트할 필드들
-                - enabled: bool
-                - interval_min: int
-                - interval_max: int
-                - daily_limit: int
-                - start_hour: int
-                - end_hour: int
-                - memo: str
+                - pending_count: int
+                - account: str
+                - today_count: int
+                - posts_per_account: int
+                - account_post_count: int
+                - lock_status: str
+                - lock_time: str
 
         Returns:
             bool: 성공 여부
@@ -209,13 +195,13 @@ class PublishSettingsManager(SheetsBase):
         row_num = setting['row_num']
 
         col_map = {
-            'enabled': (self.COL_ENABLED, lambda v: 'TRUE' if v else 'FALSE'),
-            'interval_min': (self.COL_INTERVAL_MIN, str),
-            'interval_max': (self.COL_INTERVAL_MAX, str),
-            'daily_limit': (self.COL_DAILY_LIMIT, str),
-            'start_hour': (self.COL_START_HOUR, str),
-            'end_hour': (self.COL_END_HOUR, str),
-            'memo': (self.COL_MEMO, str)
+            'pending_count': (self.COL_PENDING_COUNT, str),
+            'account': (self.COL_ACCOUNT, str),
+            'today_count': (self.COL_TODAY_COUNT, str),
+            'posts_per_account': (self.COL_POSTS_PER_ACCOUNT, str),
+            'account_post_count': (self.COL_ACCOUNT_POST_COUNT, str),
+            'lock_status': (self.COL_LOCK_STATUS, str),
+            'lock_time': (self.COL_LOCK_TIME, str)
         }
 
         try:
@@ -228,13 +214,9 @@ class PublishSettingsManager(SheetsBase):
             print(f"[X] 설정 업데이트 실패: {e}")
             return False
 
-    def set_enabled(self, group_name, enabled):
-        """발행 활성화/비활성화"""
-        return self.update_setting(group_name, enabled=enabled)
-
     def increment_today_count(self, group_name):
         """
-        오늘 발행 카운트 증가 + 마지막 발행 시간 업데이트
+        오늘 발행 카운트 증가 + 계정 발행 수 증가
 
         Args:
             group_name: 그룹명
@@ -247,12 +229,12 @@ class PublishSettingsManager(SheetsBase):
             return False
 
         row_num = setting['row_num']
-        new_count = setting['today_count'] + 1
-        current_time = self.get_current_time()
+        new_today_count = setting['today_count'] + 1
+        new_account_post_count = setting['account_post_count'] + 1
 
         try:
-            self.update_cell(self.SHEET_NAME, row_num, self.COL_TODAY_COUNT, str(new_count))
-            self.update_cell(self.SHEET_NAME, row_num, self.COL_LAST_PUBLISH, current_time)
+            self.update_cell(self.SHEET_NAME, row_num, self.COL_TODAY_COUNT, str(new_today_count))
+            self.update_cell(self.SHEET_NAME, row_num, self.COL_ACCOUNT_POST_COUNT, str(new_account_post_count))
             return True
         except Exception:
             return False
@@ -278,43 +260,176 @@ class PublishSettingsManager(SheetsBase):
 
         return reset_count
 
-    def can_publish(self, group_name):
+    def should_switch_account(self, group_name):
         """
-        현재 발행 가능한지 확인
+        계정 전환이 필요한지 확인
 
         Args:
             group_name: 그룹명
 
         Returns:
-            tuple: (가능여부, 이유)
+            bool: 계정 전환 필요 여부
         """
         setting = self.get_setting(group_name)
         if not setting:
-            return False, "설정 없음"
+            return False
 
-        if not setting['enabled']:
-            return False, "비활성화됨"
+        return setting['account_post_count'] >= setting['posts_per_account']
 
-        # 일일 한도 체크
-        if setting['today_count'] >= setting['daily_limit']:
-            return False, f"일일 한도 초과 ({setting['today_count']}/{setting['daily_limit']})"
-
-        # 시간대 체크
-        current_hour = datetime.now().hour
-        if not (setting['start_hour'] <= current_hour < setting['end_hour']):
-            return False, f"발행 시간 외 ({setting['start_hour']}~{setting['end_hour']}시)"
-
-        return True, "발행 가능"
-
-    def get_enabled_groups(self):
+    def switch_to_next_account(self, group_name, next_account):
         """
-        발행 활성화된 그룹 목록
+        다음 계정으로 전환
+
+        Args:
+            group_name: 그룹명
+            next_account: 다음 계정 ID
 
         Returns:
-            list: 활성화된 그룹명 리스트
+            bool: 성공 여부
         """
-        settings = self.get_all_settings()
-        return [name for name, s in settings.items() if s['enabled']]
+        setting = self.get_setting(group_name)
+        if not setting:
+            return False
+
+        row_num = setting['row_num']
+
+        try:
+            # 계정 변경 + 계정 발행 수 리셋
+            self.update_cell(self.SHEET_NAME, row_num, self.COL_ACCOUNT, next_account)
+            self.update_cell(self.SHEET_NAME, row_num, self.COL_ACCOUNT_POST_COUNT, '0')
+            return True
+        except Exception:
+            return False
+
+    def acquire_lock(self, group_name, bot_id):
+        """
+        그룹 잠금 획득 (동시성 제어)
+
+        Args:
+            group_name: 그룹명
+            bot_id: 봇 식별자
+
+        Returns:
+            bool: 잠금 획득 성공 여부
+        """
+        setting = self.get_setting(group_name)
+        if not setting:
+            return False
+
+        # 이미 잠겨있으면 실패
+        if setting['lock_status']:
+            # 5분 이상 경과한 잠금은 해제된 것으로 간주
+            if setting['lock_time']:
+                try:
+                    lock_time = datetime.strptime(setting['lock_time'], '%Y-%m-%d %H:%M:%S')
+                    elapsed = (datetime.now() - lock_time).total_seconds()
+                    if elapsed < 300:  # 5분
+                        return False
+                except Exception:
+                    pass
+
+        row_num = setting['row_num']
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        try:
+            self.update_cell(self.SHEET_NAME, row_num, self.COL_LOCK_STATUS, bot_id)
+            self.update_cell(self.SHEET_NAME, row_num, self.COL_LOCK_TIME, current_time)
+            return True
+        except Exception:
+            return False
+
+    def release_lock(self, group_name, bot_id):
+        """
+        그룹 잠금 해제
+
+        Args:
+            group_name: 그룹명
+            bot_id: 봇 식별자 (본인 잠금만 해제 가능)
+
+        Returns:
+            bool: 해제 성공 여부
+        """
+        setting = self.get_setting(group_name)
+        if not setting:
+            return False
+
+        # 본인 잠금이 아니면 해제 불가
+        if setting['lock_status'] != bot_id:
+            return False
+
+        row_num = setting['row_num']
+
+        try:
+            self.update_cell(self.SHEET_NAME, row_num, self.COL_LOCK_STATUS, '')
+            self.update_cell(self.SHEET_NAME, row_num, self.COL_LOCK_TIME, '')
+            return True
+        except Exception:
+            return False
+
+    def force_release_lock(self, group_name):
+        """
+        그룹 잠금 강제 해제 (관리자용)
+
+        Args:
+            group_name: 그룹명
+
+        Returns:
+            bool: 해제 성공 여부
+        """
+        setting = self.get_setting(group_name)
+        if not setting:
+            return False
+
+        row_num = setting['row_num']
+
+        try:
+            self.update_cell(self.SHEET_NAME, row_num, self.COL_LOCK_STATUS, '')
+            self.update_cell(self.SHEET_NAME, row_num, self.COL_LOCK_TIME, '')
+            return True
+        except Exception:
+            return False
+
+    def is_locked(self, group_name):
+        """
+        그룹이 잠겨있는지 확인
+
+        Args:
+            group_name: 그룹명
+
+        Returns:
+            tuple: (잠겨있음 여부, 잠금 주체)
+        """
+        setting = self.get_setting(group_name)
+        if not setting:
+            return False, None
+
+        if not setting['lock_status']:
+            return False, None
+
+        # 5분 이상 경과한 잠금은 해제된 것으로 간주
+        if setting['lock_time']:
+            try:
+                lock_time = datetime.strptime(setting['lock_time'], '%Y-%m-%d %H:%M:%S')
+                elapsed = (datetime.now() - lock_time).total_seconds()
+                if elapsed >= 300:  # 5분
+                    return False, None
+            except Exception:
+                pass
+
+        return True, setting['lock_status']
+
+    def update_pending_count(self, group_name, count):
+        """
+        발행대기 콘텐츠 수 업데이트
+
+        Args:
+            group_name: 그룹명
+            count: 대기 콘텐츠 수
+
+        Returns:
+            bool: 성공 여부
+        """
+        return self.update_setting(group_name, pending_count=count)
 
     def sync_with_account_groups(self):
         """
@@ -355,11 +470,12 @@ if __name__ == '__main__':
     print(f"\n전체 설정 ({len(settings)}개):")
 
     for name, s in settings.items():
-        can, reason = manager.can_publish(name)
-        status = "[OK]" if can else "[X]"
+        locked, locker = manager.is_locked(name)
+        lock_status = f"잠금({locker})" if locked else "사용가능"
         print(f"\n  [{name}]")
-        print(f"    활성화: {s['enabled']}")
-        print(f"    발행 간격: {s['interval_min']}~{s['interval_max']}초")
-        print(f"    일일 한도: {s['today_count']}/{s['daily_limit']}")
-        print(f"    발행 시간: {s['start_hour']}~{s['end_hour']}시")
-        print(f"    발행 가능: {status} {reason}")
+        print(f"    발행대기: {s['pending_count']}개")
+        print(f"    활성계정: {s['account'] or '없음'}")
+        print(f"    오늘발행: {s['today_count']}개")
+        print(f"    계정당발행: {s['posts_per_account']}개")
+        print(f"    현재계정발행: {s['account_post_count']}개")
+        print(f"    상태: {lock_status}")
