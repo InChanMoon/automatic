@@ -24,6 +24,11 @@ cookies/
 *.tmp
 clipboard_output.html
 
+# 캐시 및 쿠키
+image_cache/
+naver_cookies.json
+*.spec
+
 # OS
 .DS_Store
 Thumbs.db

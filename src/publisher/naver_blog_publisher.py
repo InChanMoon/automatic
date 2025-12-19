@@ -93,6 +93,16 @@ class NaverBlogPublisher:
         self.is_logged_in = False
         self.current_blog_id = None
         self.log_callback: Optional[Callable[[str], None]] = None
+        self.stop_requested = False  # 중지 요청 플래그
+
+    def request_stop(self):
+        """중지 요청 - 브라우저 강제 종료"""
+        self.stop_requested = True
+        self.log("중지 요청됨 - 브라우저 종료 중...")
+        try:
+            self.close_browser()
+        except:
+            pass
 
     def set_log_callback(self, callback: Callable[[str], None]):
         """로그 콜백 설정"""
@@ -112,10 +122,15 @@ class NaverBlogPublisher:
         time.sleep(delay)
 
     def _paste_text(self, text: str):
-        """클립보드 복사 후 Ctrl+V로 붙여넣기"""
-        pyperclip.copy(text)
-        self._random_delay(0.2, 0.5)
-        self.page.keyboard.press("Control+v")
+        """텍스트 입력 - 헤드리스 모드에서는 keyboard.type 사용"""
+        if self.headless:
+            # 헤드리스 모드: 클립보드가 작동하지 않으므로 직접 타이핑
+            self.page.keyboard.type(text, delay=10)
+        else:
+            # 일반 모드: 클립보드 붙여넣기 (더 빠름)
+            pyperclip.copy(text)
+            self._random_delay(0.2, 0.5)
+            self.page.keyboard.press("Control+v")
         self._random_delay(0.3, 0.8)
 
     def start_browser(self):
@@ -212,7 +227,36 @@ class NaverBlogPublisher:
             self.log(f"쿠키 로드 실패: {e}")
             return False
 
-    def login_with_credentials(self, naver_id: str, naver_pw: str) -> bool:
+    def check_account_protection(self) -> Dict:
+        """아이디 보호조치(잠금) 상태 확인
+
+        Returns:
+            dict: {is_protected: bool, reason: str}
+        """
+        try:
+            # 보호조치 페이지 감지
+            page_content = self.page.content()
+
+            # 보호조치 키워드 확인
+            protection_indicators = [
+                "비정상적인 활동이 감지되어",
+                "아이디를 보호(잠금) 조치중입니다",
+                "스팸성 홍보활동",
+                "서비스 이용이 제한"
+            ]
+
+            for indicator in protection_indicators:
+                if indicator in page_content:
+                    self.log(f"[경고] 아이디 보호조치 감지: {indicator}")
+                    return {'is_protected': True, 'reason': indicator}
+
+            return {'is_protected': False, 'reason': ''}
+
+        except Exception as e:
+            self.log(f"보호조치 확인 오류: {e}")
+            return {'is_protected': False, 'reason': ''}
+
+    def login_with_credentials(self, naver_id: str, naver_pw: str) -> Dict:
         """아이디/비밀번호로 로그인
 
         Args:
@@ -220,7 +264,7 @@ class NaverBlogPublisher:
             naver_pw: 네이버 비밀번호
 
         Returns:
-            로그인 성공 여부
+            dict: {success: bool, protected: bool, reason: str}
         """
         self.log("로그인 페이지 접속 중...")
         self.page.goto(URLS["login"])
@@ -243,6 +287,14 @@ class NaverBlogPublisher:
             self.page.click(SELECTORS["login_button"])
             self.log("로그인 버튼 클릭")
 
+            self._random_delay(2, 3)
+
+            # 보호조치 확인
+            protection = self.check_account_protection()
+            if protection['is_protected']:
+                self.is_logged_in = False
+                return {'success': False, 'protected': True, 'reason': protection['reason']}
+
             # 로그인 성공 확인
             try:
                 self.page.wait_for_url(
@@ -255,48 +307,67 @@ class NaverBlogPublisher:
                 # 쿠키 저장
                 self.save_cookies()
 
-                return True
+                return {'success': True, 'protected': False, 'reason': ''}
 
             except:
                 current_url = self.page.url
                 if "nid.naver.com" in current_url:
+                    # 다시 보호조치 확인
+                    protection = self.check_account_protection()
+                    if protection['is_protected']:
+                        return {'success': False, 'protected': True, 'reason': protection['reason']}
                     self.log("로그인 실패 - 캡차 또는 잘못된 인증정보")
-                    return False
+                    return {'success': False, 'protected': False, 'reason': '캡차 또는 잘못된 인증정보'}
                 else:
                     self.is_logged_in = True
                     self.save_cookies()
-                    return True
+                    return {'success': True, 'protected': False, 'reason': ''}
 
         except Exception as e:
             self.log(f"로그인 오류: {e}")
-            return False
+            return {'success': False, 'protected': False, 'reason': str(e)}
 
-    def login_with_cookies(self) -> bool:
+    def login_with_cookies(self) -> Dict:
         """저장된 쿠키로 로그인 시도
 
         Returns:
-            로그인 성공 여부
+            dict: {success: bool, protected: bool, reason: str}
         """
         if not self.load_cookies():
-            return False
+            return {'success': False, 'protected': False, 'reason': '쿠키 파일 없음'}
 
         self.log("쿠키로 로그인 확인 중...")
-        self.page.goto(URLS["blog_home"])
+
+        # 쿠키 적용을 위해 네이버 도메인 먼저 방문
+        self.page.goto("https://www.naver.com")
+        self._random_delay(1, 2)
+
+        # 글쓰기 페이지로 직접 이동하여 로그인 확인
+        self.page.goto(URLS["blog_write"])
         self._random_delay(2, 3)
 
-        # 로그인 상태 확인 - 블로그 홈에서 내 블로그 접근 가능한지
+        # 보호조치 확인
+        protection = self.check_account_protection()
+        if protection['is_protected']:
+            self.is_logged_in = False
+            return {'success': False, 'protected': True, 'reason': protection['reason']}
+
+        # 로그인 상태 확인 - 글쓰기 에디터가 로드되는지 확인
         try:
-            # 로그인되면 글쓰기 버튼이 보임
-            self.page.wait_for_selector(
-                'a[href*="GoBlogWrite"], button[class*="write"]',
-                timeout=5000
-            )
+            # 로그인 페이지로 리다이렉트되면 실패
+            current_url = self.page.url
+            if "nidlogin" in current_url or "nid.naver.com" in current_url:
+                self.log("쿠키 만료 - 로그인 페이지로 리다이렉트됨")
+                return {'success': False, 'protected': False, 'reason': '쿠키 만료'}
+
+            # 에디터 iframe이 로드되면 성공
+            self.page.wait_for_selector(SELECTORS["main_frame"], timeout=10000)
             self.is_logged_in = True
             self.log("쿠키 로그인 성공!")
-            return True
+            return {'success': True, 'protected': False, 'reason': ''}
         except:
             self.log("쿠키 만료 - 재로그인 필요")
-            return False
+            return {'success': False, 'protected': False, 'reason': '쿠키 만료'}
 
     def wait_for_manual_login(self, timeout: int = 300) -> bool:
         """수동 로그인 대기
@@ -399,17 +470,34 @@ class NaverBlogPublisher:
                 progress_callback(msg, pct)
 
         try:
-            update_progress("글쓰기 페이지로 이동 중...", 5)
-            self.page.goto(URLS["blog_write"])
-            self._random_delay(3, 5)
+            # 이미 글쓰기 페이지에 있는지 확인 (쿠키 로그인 후)
+            current_url = self.page.url
+            if "GoBlogWrite" not in current_url and "blog.naver.com" not in current_url:
+                update_progress("글쓰기 페이지로 이동 중...", 5)
+                self.page.goto(URLS["blog_write"])
+                self._random_delay(3, 5)
+            else:
+                # 이미 글쓰기 페이지면 새로고침
+                update_progress("글쓰기 페이지 새로고침...", 5)
+                self.page.goto(URLS["blog_write"])
+                self._random_delay(2, 3)
 
             update_progress("에디터 로딩 대기 중...", 10)
 
-            # iframe 전환
+            # iframe 확인 - 새 에디터는 iframe 없이 직접 페이지에 로드됨
             try:
-                self.page.wait_for_selector(SELECTORS["main_frame"], timeout=20000)
-                frame = self.page.frame_locator(SELECTORS["main_frame"])
-                update_progress("에디터 iframe 로드 완료", 15)
+                iframe_count = self.page.locator(SELECTORS["main_frame"]).count()
+                if iframe_count > 0:
+                    frame = self.page.frame_locator(SELECTORS["main_frame"])
+                    self.log("iframe 모드로 에디터 접근")
+                else:
+                    # iframe이 없으면 page 자체에서 찾기 (새 에디터)
+                    frame = self.page
+                    self.log("직접 페이지 모드로 에디터 접근")
+
+                # 에디터 로드 확인 - 제목 영역이 보이는지 확인
+                frame.locator(SELECTORS["title_area"]).wait_for(state="visible", timeout=15000)
+                update_progress("에디터 로드 완료", 15)
             except Exception as e:
                 return {'success': False, 'error': f'에디터 로드 실패: {e}', 'url': '', 'is_scheduled': False}
 
@@ -460,7 +548,7 @@ class NaverBlogPublisher:
             try:
                 publish_btn = frame.locator(SELECTORS["publish_button"])
                 publish_btn.wait_for(state="visible", timeout=10000)
-                self._random_delay(1, 2)  # 버튼 클릭 전 대기
+                self._random_delay(1, 2)
                 publish_btn.click()
                 update_progress("발행 버튼 클릭 완료", 85)
             except Exception as e:
@@ -504,9 +592,19 @@ class NaverBlogPublisher:
             update_progress("발행 확인 중...", 90)
             try:
                 confirm_btn = frame.locator(SELECTORS["publish_confirm"])
-                confirm_btn.wait_for(state="visible", timeout=15000)  # 타임아웃 증가
-                self._random_delay(1, 2)  # 확인 버튼 클릭 전 대기
-                confirm_btn.click()
+                confirm_btn.wait_for(state="visible", timeout=15000)
+                self._random_delay(1, 2)
+
+                # 헤드리스 모드: force 클릭 사용
+                if self.headless:
+                    self.log("헤드리스 모드: 발행 확인 버튼 클릭 시도...")
+                    confirm_btn.scroll_into_view_if_needed()
+                    self._random_delay(0.5, 1)
+                    confirm_btn.click(force=True)
+                    self.log("발행 확인 버튼 클릭 완료")
+                else:
+                    confirm_btn.click()
+
                 update_progress("발행 확인 버튼 클릭", 95)
             except Exception as e:
                 return {'success': False, 'error': f'발행 확인 실패: {e}', 'url': '', 'is_scheduled': is_scheduled}
@@ -514,15 +612,64 @@ class NaverBlogPublisher:
             # 발행 완료 대기
             update_progress("발행 완료 대기 중...", 98)
             try:
-                # 실제 포스트 URL 대기 (PostView 또는 숫자 ID가 포함된 URL)
-                # 예: https://blog.naver.com/userid/123456789
-                # 예: https://blog.naver.com/PostView.naver?blogId=...
+                # 예약발행인 경우 다른 처리
+                if is_scheduled:
+                    # 예약발행: 글쓰기 페이지에서 벗어나면 성공
+                    def is_not_write_page(url):
+                        # 글쓰기 페이지들 제외
+                        if "GoBlogWrite" in url:
+                            return False
+                        if "Redirect=Write" in url:
+                            return False
+                        if "nid.naver.com" in url:
+                            return False
+                        return True
+
+                    try:
+                        self.page.wait_for_url(is_not_write_page, timeout=30000)
+                        self._random_delay(1, 2)
+                        current_url = self.page.url
+                        self.log(f"예약발행 후 현재 URL: {current_url}")
+
+                        update_progress("예약발행 완료!", 100)
+                        return {
+                            'success': True,
+                            'url': current_url,
+                            'error': '',
+                            'is_scheduled': True
+                        }
+                    except:
+                        current_url = self.page.url
+                        self.log(f"예약발행 타임아웃, 현재 URL: {current_url}")
+                        # 아직 글쓰기 페이지면 실패
+                        if "GoBlogWrite" in current_url or "Redirect=Write" in current_url:
+                            return {
+                                'success': False,
+                                'error': '예약발행 실패 - 글쓰기 페이지에서 벗어나지 못함',
+                                'url': '',
+                                'is_scheduled': True
+                            }
+                        else:
+                            return {
+                                'success': True,
+                                'url': current_url,
+                                'error': '',
+                                'is_scheduled': True
+                            }
+
+                # 즉시발행인 경우
                 def is_post_url(url):
-                    # Redirect URL 제외
+                    # Redirect URL 제외 (blog.naver.com/아이디?Redirect=Write 등)
                     if "Redirect=" in url:
+                        return False
+                    # 쿼리 파라미터가 있는 블로그 메인 URL 제외
+                    if re.search(r'blog\.naver\.com/[^/]+\?', url):
                         return False
                     # 글쓰기 페이지 제외
                     if "GoBlogWrite" in url:
+                        return False
+                    # 로그인 페이지 제외
+                    if "nid.naver.com" in url:
                         return False
                     # 실제 포스트 URL 확인
                     if "PostView" in url:
@@ -530,16 +677,53 @@ class NaverBlogPublisher:
                     # 숫자 ID가 있는 블로그 URL (blog.naver.com/userid/12345)
                     if re.search(r'blog\.naver\.com/[^/]+/\d+', url):
                         return True
+                    # 블로그 홈으로 리다이렉트된 경우도 성공으로 처리
+                    if "BlogHome" in url:
+                        return True
+                    if "section.blog.naver.com" in url and "Redirect" not in url:
+                        return True
                     return False
 
-                self.page.wait_for_url(is_post_url, timeout=60000)
-                self._random_delay(2, 3)  # URL 안정화 대기
+                # 발행 완료 대기 - 여러 방법으로 URL 확인
+                published_url = None
 
-                published_url = self.page.url
-                self.log(f"발행된 URL: {published_url}")
+                # 방법 1: 일정 시간 대기 후 URL 확인 (발행 처리 시간 고려)
+                self._random_delay(3, 5)
 
-                if "blog.naver.com" in published_url:
-                    update_progress("발행 완료!" if not is_scheduled else "예약발행 완료!", 100)
+                # 현재 페이지 URL 먼저 확인
+                current_url = self.page.url
+                self.log(f"발행 후 현재 URL: {current_url}")
+                if is_post_url(current_url):
+                    published_url = current_url
+                    self.log("현재 탭에서 발행 URL 확인됨")
+
+                # 방법 2: 새 탭 확인
+                if not published_url:
+                    all_pages = self.context.pages
+                    self.log(f"열린 탭 수: {len(all_pages)}")
+                    for p in all_pages:
+                        try:
+                            p_url = p.url
+                            if is_post_url(p_url):
+                                published_url = p_url
+                                self.log(f"새 탭에서 발행 URL 발견: {p_url}")
+                                break
+                        except:
+                            continue
+
+                # 방법 3: wait_for_url로 추가 대기
+                if not published_url:
+                    try:
+                        self.page.wait_for_url(is_post_url, timeout=10000)
+                        published_url = self.page.url
+                        self.log(f"URL 변화 감지됨: {published_url}")
+                    except:
+                        self.log("URL 변화 감지 실패")
+
+                if published_url:
+                    self._random_delay(1, 2)
+                    self.log(f"발행된 URL: {published_url}")
+                    update_progress("발행 완료!", 100)
                     return {
                         'success': True,
                         'url': published_url,
@@ -548,9 +732,9 @@ class NaverBlogPublisher:
                     }
                 else:
                     return {
-                        'success': True,
-                        'url': published_url,
-                        'error': '예상과 다른 URL',
+                        'success': False,
+                        'error': '발행 완료 URL 확인 실패',
+                        'url': '',
                         'is_scheduled': is_scheduled
                     }
 
@@ -734,9 +918,14 @@ class NaverBlogPublisher:
 
         for i, line in enumerate(lines):
             if line.strip():
-                pyperclip.copy(line)
-                self._random_delay(0.1, 0.3)
-                self.page.keyboard.press("Control+v")
+                if self.headless:
+                    # 헤드리스 모드: 클립보드 대신 직접 타이핑
+                    self.page.keyboard.type(line, delay=5)
+                else:
+                    # 일반 모드: 클립보드 사용
+                    pyperclip.copy(line)
+                    self._random_delay(0.1, 0.3)
+                    self.page.keyboard.press("Control+v")
                 self._random_delay(0.1, 0.3)
 
             if i < len(lines) - 1:

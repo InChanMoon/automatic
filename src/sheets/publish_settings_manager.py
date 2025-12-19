@@ -1,12 +1,22 @@
 """
-발행 설정 관리자 - PublishSettingsManager
+발행 설정 관리자 - PublishSettingsManager V2
 
 그룹별 발행 설정 관리:
 - 발행대기 콘텐츠 수
 - 활성 계정
-- 오늘 발행 수
 - 계정당 발행 수
+- 이미지 인덱스 (영속성)
 - 잠금 상태 (동시성 제어)
+
+컬럼 구조 (간소화):
+- A: 그룹명
+- B: 발행대기
+- C: 계정
+- D: 계정당발행수
+- E: 현재계정발행수
+- F: 이미지인덱스 (JSON: {"키워드": index})
+- G: 잠금상태
+- H: 잠금시간
 """
 
 import json
@@ -19,20 +29,20 @@ class PublishSettingsManager(SheetsBase):
 
     SHEET_NAME = '발행설정'
 
-    # 컬럼 인덱스 (0-based)
+    # 컬럼 인덱스 (0-based) - 간소화된 구조
     COL_GROUP_NAME = 0       # A: 그룹명
     COL_PENDING_COUNT = 1    # B: 발행대기 (대기 콘텐츠 수)
     COL_ACCOUNT = 2          # C: 계정 (활성 계정)
-    COL_TODAY_COUNT = 3      # D: 오늘 발행 (오늘 발행 수)
-    COL_POSTS_PER_ACCOUNT = 4  # E: 계정당 발행 수
-    COL_ACCOUNT_POST_COUNT = 5  # F: 현재 계정 발행 수 (내부용)
+    COL_POSTS_PER_ACCOUNT = 3  # D: 계정당 발행 수
+    COL_ACCOUNT_POST_COUNT = 4  # E: 현재 계정 발행 수 (내부용)
+    COL_IMAGE_INDEX = 5      # F: 이미지 인덱스 (JSON)
     COL_LOCK_STATUS = 6      # G: 잠금 상태 (동시성 제어)
     COL_LOCK_TIME = 7        # H: 잠금 시간
 
     # 헤더
     HEADERS = [
-        '그룹', '발행대기', '계정', '오늘발행',
-        '계정당발행수', '현재계정발행수', '잠금상태', '잠금시간'
+        '그룹', '발행대기', '계정',
+        '계정당발행수', '현재계정발행수', '이미지인덱스', '잠금상태', '잠금시간'
     ]
 
     def __init__(self):
@@ -86,13 +96,20 @@ class PublishSettingsManager(SheetsBase):
         for i in range(1, len(values)):
             row = values[i]
             if len(row) > 0 and row[0] == group_name:
+                # 이미지 인덱스 파싱
+                image_index_str = row[self.COL_IMAGE_INDEX] if len(row) > self.COL_IMAGE_INDEX else ''
+                try:
+                    image_index = json.loads(image_index_str) if image_index_str else {}
+                except json.JSONDecodeError:
+                    image_index = {}
+
                 return {
                     'group_name': group_name,
                     'pending_count': int(row[self.COL_PENDING_COUNT]) if len(row) > self.COL_PENDING_COUNT and row[self.COL_PENDING_COUNT] else 0,
                     'account': row[self.COL_ACCOUNT] if len(row) > self.COL_ACCOUNT else '',
-                    'today_count': int(row[self.COL_TODAY_COUNT]) if len(row) > self.COL_TODAY_COUNT and row[self.COL_TODAY_COUNT] else 0,
                     'posts_per_account': int(row[self.COL_POSTS_PER_ACCOUNT]) if len(row) > self.COL_POSTS_PER_ACCOUNT and row[self.COL_POSTS_PER_ACCOUNT] else 5,
                     'account_post_count': int(row[self.COL_ACCOUNT_POST_COUNT]) if len(row) > self.COL_ACCOUNT_POST_COUNT and row[self.COL_ACCOUNT_POST_COUNT] else 0,
+                    'image_index': image_index,
                     'lock_status': row[self.COL_LOCK_STATUS] if len(row) > self.COL_LOCK_STATUS else '',
                     'lock_time': row[self.COL_LOCK_TIME] if len(row) > self.COL_LOCK_TIME else '',
                     'row_num': i + 1
@@ -120,13 +137,21 @@ class PublishSettingsManager(SheetsBase):
             row = values[i]
             if len(row) > 0 and row[0]:
                 group_name = row[0]
+
+                # 이미지 인덱스 파싱
+                image_index_str = row[self.COL_IMAGE_INDEX] if len(row) > self.COL_IMAGE_INDEX else ''
+                try:
+                    image_index = json.loads(image_index_str) if image_index_str else {}
+                except json.JSONDecodeError:
+                    image_index = {}
+
                 settings[group_name] = {
                     'group_name': group_name,
                     'pending_count': int(row[self.COL_PENDING_COUNT]) if len(row) > self.COL_PENDING_COUNT and row[self.COL_PENDING_COUNT] else 0,
                     'account': row[self.COL_ACCOUNT] if len(row) > self.COL_ACCOUNT else '',
-                    'today_count': int(row[self.COL_TODAY_COUNT]) if len(row) > self.COL_TODAY_COUNT and row[self.COL_TODAY_COUNT] else 0,
                     'posts_per_account': int(row[self.COL_POSTS_PER_ACCOUNT]) if len(row) > self.COL_POSTS_PER_ACCOUNT and row[self.COL_POSTS_PER_ACCOUNT] else 5,
                     'account_post_count': int(row[self.COL_ACCOUNT_POST_COUNT]) if len(row) > self.COL_ACCOUNT_POST_COUNT and row[self.COL_ACCOUNT_POST_COUNT] else 0,
+                    'image_index': image_index,
                     'lock_status': row[self.COL_LOCK_STATUS] if len(row) > self.COL_LOCK_STATUS else '',
                     'lock_time': row[self.COL_LOCK_TIME] if len(row) > self.COL_LOCK_TIME else '',
                     'row_num': i + 1
@@ -155,9 +180,9 @@ class PublishSettingsManager(SheetsBase):
             group_name,
             '0',  # pending_count (콘텐츠 매니저에서 업데이트)
             '',   # account (자동 설정)
-            '0',  # today_count
             str(posts_per_account),
             '0',  # account_post_count
+            '{}', # image_index (빈 JSON)
             '',   # lock_status
             ''    # lock_time
         ]
@@ -178,9 +203,9 @@ class PublishSettingsManager(SheetsBase):
             **kwargs: 업데이트할 필드들
                 - pending_count: int
                 - account: str
-                - today_count: int
                 - posts_per_account: int
                 - account_post_count: int
+                - image_index: dict (JSON으로 저장)
                 - lock_status: str
                 - lock_time: str
 
@@ -197,9 +222,9 @@ class PublishSettingsManager(SheetsBase):
         col_map = {
             'pending_count': (self.COL_PENDING_COUNT, str),
             'account': (self.COL_ACCOUNT, str),
-            'today_count': (self.COL_TODAY_COUNT, str),
             'posts_per_account': (self.COL_POSTS_PER_ACCOUNT, str),
             'account_post_count': (self.COL_ACCOUNT_POST_COUNT, str),
+            'image_index': (self.COL_IMAGE_INDEX, lambda x: json.dumps(x, ensure_ascii=False)),
             'lock_status': (self.COL_LOCK_STATUS, str),
             'lock_time': (self.COL_LOCK_TIME, str)
         }
@@ -214,9 +239,9 @@ class PublishSettingsManager(SheetsBase):
             print(f"[X] 설정 업데이트 실패: {e}")
             return False
 
-    def increment_today_count(self, group_name):
+    def increment_account_post_count(self, group_name):
         """
-        오늘 발행 카운트 증가 + 계정 발행 수 증가
+        현재 계정 발행 수 증가
 
         Args:
             group_name: 그룹명
@@ -229,36 +254,18 @@ class PublishSettingsManager(SheetsBase):
             return False
 
         row_num = setting['row_num']
-        new_today_count = setting['today_count'] + 1
         new_account_post_count = setting['account_post_count'] + 1
 
         try:
-            self.update_cell(self.SHEET_NAME, row_num, self.COL_TODAY_COUNT, str(new_today_count))
             self.update_cell(self.SHEET_NAME, row_num, self.COL_ACCOUNT_POST_COUNT, str(new_account_post_count))
             return True
         except Exception:
             return False
 
-    def reset_all_today_counts(self):
-        """
-        모든 그룹의 오늘 발행 카운트 리셋 (매일 자정에 실행)
-
-        Returns:
-            int: 리셋된 그룹 수
-        """
-        settings = self.get_all_settings()
-        reset_count = 0
-
-        for group_name, setting in settings.items():
-            if setting['today_count'] > 0:
-                try:
-                    self.update_cell(self.SHEET_NAME, setting['row_num'],
-                                     self.COL_TODAY_COUNT, '0')
-                    reset_count += 1
-                except Exception:
-                    pass
-
-        return reset_count
+    # 하위호환: increment_today_count -> increment_account_post_count
+    def increment_today_count(self, group_name):
+        """하위호환용 - increment_account_post_count 호출"""
+        return self.increment_account_post_count(group_name)
 
     def should_switch_account(self, group_name):
         """
@@ -431,6 +438,88 @@ class PublishSettingsManager(SheetsBase):
         """
         return self.update_setting(group_name, pending_count=count)
 
+    # ========== 이미지 인덱스 관련 메서드 ==========
+
+    def get_image_index(self, group_name, keyword):
+        """
+        특정 키워드의 이미지 인덱스 가져오기
+
+        Args:
+            group_name: 그룹명
+            keyword: 키워드
+
+        Returns:
+            int: 현재 인덱스 (없으면 0)
+        """
+        setting = self.get_setting(group_name)
+        if not setting:
+            return 0
+
+        return setting.get('image_index', {}).get(keyword, 0)
+
+    def set_image_index(self, group_name, keyword, index):
+        """
+        특정 키워드의 이미지 인덱스 설정
+
+        Args:
+            group_name: 그룹명
+            keyword: 키워드
+            index: 새 인덱스
+
+        Returns:
+            bool: 성공 여부
+        """
+        setting = self.get_setting(group_name)
+        if not setting:
+            return False
+
+        # 기존 인덱스 가져와서 업데이트
+        image_index = setting.get('image_index', {})
+        image_index[keyword] = index
+
+        return self.update_setting(group_name, image_index=image_index)
+
+    def increment_image_index(self, group_name, keyword):
+        """
+        특정 키워드의 이미지 인덱스 1 증가
+
+        Args:
+            group_name: 그룹명
+            keyword: 키워드
+
+        Returns:
+            int: 증가된 새 인덱스
+        """
+        current = self.get_image_index(group_name, keyword)
+        new_index = current + 1
+        self.set_image_index(group_name, keyword, new_index)
+        return new_index
+
+    def reset_image_index(self, group_name, keyword=None):
+        """
+        이미지 인덱스 초기화
+
+        Args:
+            group_name: 그룹명
+            keyword: 특정 키워드 (None이면 전체 초기화)
+
+        Returns:
+            bool: 성공 여부
+        """
+        setting = self.get_setting(group_name)
+        if not setting:
+            return False
+
+        if keyword:
+            # 특정 키워드만 초기화
+            image_index = setting.get('image_index', {})
+            if keyword in image_index:
+                del image_index[keyword]
+            return self.update_setting(group_name, image_index=image_index)
+        else:
+            # 전체 초기화
+            return self.update_setting(group_name, image_index={})
+
     def sync_with_account_groups(self):
         """
         계정 그룹과 발행 설정 동기화
@@ -475,7 +564,7 @@ if __name__ == '__main__':
         print(f"\n  [{name}]")
         print(f"    발행대기: {s['pending_count']}개")
         print(f"    활성계정: {s['account'] or '없음'}")
-        print(f"    오늘발행: {s['today_count']}개")
         print(f"    계정당발행: {s['posts_per_account']}개")
         print(f"    현재계정발행: {s['account_post_count']}개")
+        print(f"    이미지인덱스: {s['image_index']}")
         print(f"    상태: {lock_status}")

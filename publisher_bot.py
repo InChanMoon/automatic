@@ -17,6 +17,7 @@ from src.sheets.account_manager import AccountManager
 from src.sheets.publish_settings_manager import PublishSettingsManager
 from src.publisher.naver_blog_publisher import NaverBlogPublisher
 from src.drive.image_manager import DriveImageManager
+from publisher_engine import PublisherEngine
 
 
 class PublisherBot:
@@ -241,36 +242,39 @@ class PublisherBot:
 
     def refresh_all_data(self):
         """데이터 새로고침"""
-        self.log("새로고침...")
-        self.settings_mgr.sync_with_account_groups()
+        try:
+            self.log("새로고침...")
+            self.settings_mgr.sync_with_account_groups()
 
-        old = {k: v.get() for k, v in self.group_checkboxes.items()}
-        self.tree.delete(*self.tree.get_children())
-        self.group_checkboxes.clear()
+            old = {k: v.get() for k, v in self.group_checkboxes.items()}
+            self.tree.delete(*self.tree.get_children())
+            self.group_checkboxes.clear()
 
-        groups = self.account_mgr.get_account_groups()
-        settings = self.settings_mgr.get_all_settings()
+            groups = self.account_mgr.get_account_groups()
+            settings = self.settings_mgr.get_all_settings()
 
-        for grp in groups:
-            contents = self.content_mgr.get_ready_contents_by_group(grp)
-            setting = settings.get(grp, {})
+            for grp in groups:
+                contents = self.content_mgr.get_ready_contents_by_group(grp)
+                setting = settings.get(grp, {})
 
-            locked, _ = self.settings_mgr.is_locked(grp)
-            tag = 'locked' if locked else 'available'
+                locked, _ = self.settings_mgr.is_locked(grp)
+                tag = 'locked' if locked else 'available'
 
-            var = tk.BooleanVar(value=old.get(grp, False))
-            self.group_checkboxes[grp] = var
+                var = tk.BooleanVar(value=old.get(grp, False))
+                self.group_checkboxes[grp] = var
 
-            self.tree.insert('', 'end', values=(
-                "☑" if var.get() else "☐",
-                grp,
-                len(contents),
-                setting.get('today_count', 0),
-                setting.get('posts_per_account', 5)
-            ), tags=(tag,))
+                self.tree.insert('', 'end', values=(
+                    "☑" if var.get() else "☐",
+                    grp,
+                    len(contents),
+                    setting.get('today_count', 0),
+                    setting.get('posts_per_account', 5)
+                ), tags=(tag,))
 
-        self.update_count()
-        self.log("새로고침 완료", 'success')
+            self.update_count()
+            self.log("새로고침 완료", 'success')
+        except Exception as e:
+            self.log(f"새로고침 실패 (네트워크 오류): {e}", 'warning')
 
     def force_release_locks(self):
         """잠금 해제"""
@@ -413,100 +417,34 @@ class PublisherBot:
         self.stop_btn.config(state='normal')
         self.status_label.config(text="발행중", fg='#4CAF50')
 
-        threading.Thread(target=self.publish_loop, args=(selected,), daemon=True).start()
+        # PublisherEngine 사용
+        self.engine = PublisherEngine(
+            bot_id=self.bot_id,
+            headless=self.headless_var.get(),
+            image_mgr=self.image_mgr
+        )
+        self.engine.set_log_callback(self.log)
+
+        threading.Thread(target=self._run_engine, args=(selected,), daemon=True).start()
+
+    def _run_engine(self, groups):
+        """엔진 실행 (스레드)"""
+        try:
+            self.engine.run(
+                groups=groups,
+                on_stats_update=lambda p, f: self.root.after(0, lambda: self.stats_label.config(
+                    text=f"성공:{p} 실패:{f}")),
+                on_refresh=lambda: self.root.after(0, self.refresh_all_data)
+            )
+        finally:
+            self.root.after(0, self._on_stop)
 
     def stop_publishing(self):
         """발행 중지"""
         self.stop_requested = True
+        if hasattr(self, 'engine') and self.engine:
+            self.engine.stop()
         self.log("중지 요청...", 'warning')
-
-    def publish_loop(self, groups):
-        """발행 루프"""
-        self.log(f"시작: {', '.join(groups)}", 'success')
-
-        try:
-            while not self.stop_requested:
-                published = False
-
-                for grp in groups:
-                    if self.stop_requested:
-                        break
-
-                    # 잠금 획득
-                    if not self.settings_mgr.acquire_lock(grp, self.bot_id):
-                        continue
-
-                    try:
-                        # 계정 전환 체크
-                        if self.settings_mgr.should_switch_account(grp):
-                            setting = self.settings_mgr.get_setting(grp)
-                            cur = setting.get('account', '')
-                            accs = [a['account_id'] for a in self.account_mgr.get_accounts_by_group(grp)]
-                            if cur in accs:
-                                nxt = accs[(accs.index(cur) + 1) % len(accs)]
-                            else:
-                                nxt = accs[0] if accs else None
-                            if nxt:
-                                self.settings_mgr.switch_to_next_account(grp, nxt)
-                                self.log(f"[{grp}] 계정전환: {nxt}", 'warning')
-
-                        # 계정 확인
-                        setting = self.settings_mgr.get_setting(grp)
-                        acc_id = setting.get('account', '')
-                        if not acc_id:
-                            acc = self.account_mgr.get_available_account(grp)
-                            if acc:
-                                acc_id = acc['account_id']
-                                self.settings_mgr.update_setting(grp, account=acc_id)
-                        else:
-                            acc = self.account_mgr.get_account_by_id(grp, acc_id)
-
-                        if not acc:
-                            continue
-
-                        # 콘텐츠 확인
-                        contents = self.content_mgr.get_ready_contents_by_group(grp)
-                        if not contents:
-                            continue
-
-                        content = contents[0]
-                        success = self.publish_one(grp, acc, content)
-
-                        if success:
-                            published = True
-                            self.stats['published'] += 1
-                        else:
-                            self.stats['failed'] += 1
-
-                        self.root.after(0, lambda: self.stats_label.config(
-                            text=f"성공:{self.stats['published']} 실패:{self.stats['failed']}"))
-                        self.root.after(0, self.refresh_all_data)
-
-                        if not self.stop_requested:
-                            wait = random.randint(3, 8)
-                            self.log(f"{wait}초 대기...")
-                            self._wait(wait)
-
-                    finally:
-                        self.settings_mgr.release_lock(grp, self.bot_id)
-
-                if not published and not self.stop_requested:
-                    self.log("대기중... (30초)")
-                    self._wait(30)
-
-        finally:
-            for grp in groups:
-                try:
-                    self.settings_mgr.release_lock(grp, self.bot_id)
-                except:
-                    pass
-            self.root.after(0, self._on_stop)
-
-    def _wait(self, sec):
-        for _ in range(sec):
-            if self.stop_requested:
-                break
-            time.sleep(1)
 
     def _on_stop(self):
         self.publishing = False
@@ -514,81 +452,6 @@ class PublisherBot:
         self.stop_btn.config(state='disabled')
         self.status_label.config(text="대기중", fg='#666')
         self.log("중지됨", 'warning')
-
-    def _count_markers(self, content):
-        import re
-        pattern = r'\{img:(\d+)(?:-(\d+))?\}'
-        mx = 0
-        for m in re.finditer(pattern, content):
-            s, e = int(m.group(1)), int(m.group(2)) if m.group(2) else int(m.group(1))
-            mx = max(mx, s, e)
-        return mx
-
-    def publish_one(self, grp, acc, content):
-        """단일 발행"""
-        self.log(f"[{grp}] 발행: {content['title'][:20]}...")
-
-        pub = None
-        try:
-            self.content_mgr.mark_as_publishing(content['sheet_name'], content['row_num'])
-
-            # 이미지
-            images = []
-            cnt = self._count_markers(content['content'])
-            if cnt > 0 and self.image_mgr:
-                kw = content.get('keyword', '')
-                if kw:
-                    images = self.image_mgr.get_images_for_post(kw, cnt)
-
-            # 발행
-            pub = NaverBlogPublisher(headless=self.headless_var.get())
-            pub.set_log_callback(lambda m: self.log(f"  {m}"))
-            pub.start_browser()
-
-            cookie = f"cookies/{acc['account_id']}_cookies.json"
-            os.makedirs('cookies', exist_ok=True)
-            pub.cookie_path = cookie
-
-            logged = False
-            if os.path.exists(cookie):
-                logged = pub.login_with_cookies()
-            if not logged:
-                logged = pub.login_with_credentials(acc['account_id'], acc['password'])
-            if not logged:
-                raise Exception("로그인 실패")
-
-            result = pub.publish_post(
-                title=content['title'],
-                content=content['content'],
-                images=images,
-                scheduled_time=content.get('scheduled_time')
-            )
-
-            if result['success']:
-                self.content_mgr.mark_as_published(content['sheet_name'], content['row_num'],
-                    published_url=result.get('url', ''), account_id=acc['account_id'])
-                self.account_mgr.increment_usage(grp, acc['account_id'])
-                self.settings_mgr.increment_today_count(grp)
-                self.log(f"[{grp}] 성공!", 'success')
-                return True
-            else:
-                self.content_mgr.mark_as_failed(content['sheet_name'], content['row_num'])
-                self.log(f"[{grp}] 실패: {result['error']}", 'error')
-                return False
-
-        except Exception as e:
-            self.log(f"[{grp}] 오류: {e}", 'error')
-            try:
-                self.content_mgr.mark_as_failed(content['sheet_name'], content['row_num'])
-            except:
-                pass
-            return False
-        finally:
-            if pub:
-                try:
-                    pub.close_browser()
-                except:
-                    pass
 
 
 def main():

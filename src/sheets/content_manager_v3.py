@@ -138,6 +138,10 @@ class ContentManagerV3(SheetsBase):
         """발행 중으로 표시"""
         return self.update_status(sheet_name, row_num, self.STATUS_PUBLISHING)
 
+    def release_publishing_lock(self, sheet_name, row_num):
+        """발행 중 상태를 다시 ready로 되돌림 (계정 문제로 실패 시)"""
+        return self.update_status(sheet_name, row_num, self.STATUS_READY)
+
     def mark_as_published(self, sheet_name, row_num, published_url='', account_id=''):
         """
         발행 완료로 표시 + URL/시간/계정 저장

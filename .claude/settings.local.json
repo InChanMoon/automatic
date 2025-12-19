@@ -9,7 +9,10 @@
       "Bash(git config:*)",
       "Bash(git push:*)",
       "Bash(.venvScriptspip install google-auth google-api-python-client)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nv0.6 - 예약발행 및 이미지 기능 추가\n\n주요 변경사항:\n- 예약발행 기능 추가 (publish_post에 scheduled_time 파라미터)\n- Google Drive 이미지 관리 모듈 추가 (src/drive/)\n- 이미지 마커 압축 기능 ({img:1-3} 형식)\n- 콘텐츠 시트에 scheduled_time 컬럼 추가\n- AccountManager에 get_account_by_id 메서드 추가\n\n발행봇 개선:\n- 예약발행 시간 설정 UI 자동화 (달력, 시간/분 선택)\n- 예약 시간이 과거면 즉시 발행으로 전환\n- 발행 설정 마이그레이션 스크립트 추가\n\n정리:\n- 사용하지 않는 레거시 파일 삭제\n- 테스트 파일 정리\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(del test_headless_publish.py:*)",
+      "Bash(copy \"config.json\" \"dist\\publisher_bot\"\")"
     ]
   }
 }

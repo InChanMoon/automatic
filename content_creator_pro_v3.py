@@ -89,20 +89,31 @@ class ContentCreatorProV3:
         main_container.pack(fill='both', expand=True, padx=15, pady=15)
 
         # 왼쪽: 입력 영역
-        left_frame = tk.Frame(main_container, bg='#f5f5f5', width=500)
-        left_frame.pack(side='left', fill='both', padx=(0, 10))
-        left_frame.pack_propagate(False)
+        self.left_frame = tk.Frame(main_container, bg='#f5f5f5', width=500)
+        self.left_frame.pack(side='left', fill='both', padx=(0, 10))
+        self.left_frame.pack_propagate(False)
 
-        # 오른쪽: 콘텐츠 리스트 + 수정
-        right_frame = tk.Frame(main_container, bg='#f5f5f5')
-        right_frame.pack(side='right', fill='both', expand=True, padx=(10, 0))
+        # 오른쪽: 콘텐츠 리스트 + 수정 (접기/펼치기 가능)
+        self.right_frame = tk.Frame(main_container, bg='#f5f5f5')
+        self.right_frame.pack(side='right', fill='both', expand=True, padx=(10, 0))
+        self.right_panel_visible = True  # 오른쪽 패널 표시 상태
 
         # === 왼쪽 영역 ===
-        self.create_license_section(left_frame)
-        self.create_input_section(left_frame)
+        # 상단 헤더 (토글 버튼 포함)
+        left_header = tk.Frame(self.left_frame, bg='#f5f5f5')
+        left_header.pack(fill='x', pady=(0, 5))
+
+        self.toggle_btn = tk.Button(left_header, text="◀ 콘텐츠 목록",
+                                    command=self.toggle_right_panel,
+                                    bg='#607D8B', fg='white', font=('맑은 고딕', 9, 'bold'),
+                                    relief='flat', cursor='hand2', padx=10)
+        self.toggle_btn.pack(side='right')
+
+        self.create_license_section(self.left_frame)
+        self.create_input_section(self.left_frame)
 
         # === 오른쪽 영역 ===
-        self.create_content_management_section(right_frame)
+        self.create_content_management_section(self.right_frame)
 
         # 하단: 상태 표시
         status_frame = tk.Frame(self.root, bg='#f5f5f5')
@@ -149,7 +160,7 @@ class ContentCreatorProV3:
         notebook = ttk.Notebook(card)
         notebook.pack(fill='both', expand=True)
 
-        # 탭 1: URL 리라이팅
+        # 탭 1: URL 리라이팅 (기본)
         url_tab = tk.Frame(notebook, bg='white')
         notebook.add(url_tab, text="  URL 리라이팅  ")
         self.create_url_tab(url_tab)
@@ -159,52 +170,295 @@ class ContentCreatorProV3:
         notebook.add(prompt_tab, text="  프롬프트 작성  ")
         self.create_prompt_tab(prompt_tab)
 
-    def create_url_tab(self, parent):
-        """URL 리라이팅 탭 (스크롤 없이)"""
+        # 탭 3: 직접 작성
+        direct_tab = tk.Frame(notebook, bg='white')
+        notebook.add(direct_tab, text="  직접 작성  ")
+        self.create_direct_input_tab(direct_tab)
+
+    def create_direct_input_tab(self, parent):
+        """직접 입력 탭 - AI 없이 원고 직접 등록"""
         main_frame = tk.Frame(parent, bg='white', padx=10, pady=10)
         main_frame.pack(fill='both', expand=True)
 
-        # URL 입력
-        tk.Label(main_frame, text="블로그 URL:", bg='white',
-                font=('맑은 고딕', 9)).pack(anchor='w')
+        # 안내
+        tk.Label(main_frame, text="💡 AI 없이 직접 원고를 입력하여 등록합니다 (라이선스 사용량 차감 없음)",
+                bg='#E8F5E9', fg='#2E7D32', font=('맑은 고딕', 9), padx=8, pady=4).pack(fill='x', pady=(0, 8))
 
-        url_row = tk.Frame(main_frame, bg='white')
-        url_row.pack(fill='x', pady=(3, 8))
+        # 키워드 + 계정 그룹
+        row1 = tk.Frame(main_frame, bg='white')
+        row1.pack(fill='x', pady=(0, 8))
 
-        self.url_entry = tk.Entry(url_row, font=('맑은 고딕', 9), width=45)
-        self.url_entry.pack(side='left', padx=(0, 5))
+        tk.Label(row1, text="키워드:", bg='white', font=('맑은 고딕', 9, 'bold')).pack(side='left')
+        self.direct_keyword_entry = tk.Entry(row1, font=('맑은 고딕', 9), width=20)
+        self.direct_keyword_entry.pack(side='left', padx=(5, 15))
 
-        tk.Button(url_row, text="가져오기", command=self.fetch_from_url,
+        tk.Label(row1, text="계정그룹:", bg='white', font=('맑은 고딕', 9)).pack(side='left')
+        self.direct_account_group_var = tk.StringVar(value='')
+        self.direct_account_group_combo = ttk.Combobox(row1, textvariable=self.direct_account_group_var,
+                                                       state='readonly', width=15, font=('맑은 고딕', 9))
+        self.direct_account_group_combo['values'] = ['(선택안함)']
+        self.direct_account_group_combo.set('(선택안함)')
+        self.direct_account_group_combo.pack(side='left', padx=(5, 0))
+
+        # 제목
+        row2 = tk.Frame(main_frame, bg='white')
+        row2.pack(fill='x', pady=(0, 8))
+
+        tk.Label(row2, text="제목:", bg='white', font=('맑은 고딕', 9, 'bold')).pack(side='left')
+        self.direct_title_entry = tk.Entry(row2, font=('맑은 고딕', 9), width=55)
+        self.direct_title_entry.pack(side='left', padx=(5, 0), fill='x', expand=True)
+
+        # 본문
+        tk.Label(main_frame, text="본문:", bg='white', font=('맑은 고딕', 9, 'bold')).pack(anchor='w')
+
+        self.direct_content_text = scrolledtext.ScrolledText(main_frame, height=8,
+                                                              font=('맑은 고딕', 9), wrap='word')
+        self.direct_content_text.pack(fill='both', expand=True, pady=(3, 8))
+
+        # 이미지 마커 버튼들
+        marker_frame = tk.Frame(main_frame, bg='white')
+        marker_frame.pack(fill='x', pady=(0, 8))
+
+        tk.Label(marker_frame, text="이미지 마커:", bg='white', font=('맑은 고딕', 9)).pack(side='left')
+
+        tk.Label(marker_frame, text="단일", bg='white', font=('맑은 고딕', 8), fg='#666').pack(side='left', padx=(10, 3))
+        self.direct_single_marker_var = tk.StringVar(value='1')
+        tk.Spinbox(marker_frame, from_=1, to=20, width=3, textvariable=self.direct_single_marker_var,
+                  font=('맑은 고딕', 9)).pack(side='left')
+        tk.Button(marker_frame, text="추가", command=self.add_direct_single_marker,
+                 bg='#9C27B0', fg='white', font=('맑은 고딕', 8),
+                 relief='flat', padx=8).pack(side='left', padx=(3, 10))
+
+        tk.Label(marker_frame, text="연속", bg='white', font=('맑은 고딕', 8), fg='#666').pack(side='left')
+        self.direct_range_start_var = tk.StringVar(value='1')
+        self.direct_range_end_var = tk.StringVar(value='5')
+        tk.Spinbox(marker_frame, from_=1, to=20, width=3, textvariable=self.direct_range_start_var,
+                  font=('맑은 고딕', 9)).pack(side='left', padx=(3, 0))
+        tk.Label(marker_frame, text="~", bg='white', font=('맑은 고딕', 9)).pack(side='left')
+        tk.Spinbox(marker_frame, from_=1, to=20, width=3, textvariable=self.direct_range_end_var,
+                  font=('맑은 고딕', 9)).pack(side='left')
+        tk.Button(marker_frame, text="추가", command=self.add_direct_range_marker,
+                 bg='#673AB7', fg='white', font=('맑은 고딕', 8),
+                 relief='flat', padx=8).pack(side='left', padx=(3, 0))
+
+        # 예약발행 옵션
+        schedule_frame = tk.LabelFrame(main_frame, text=" 예약발행 ", bg='white',
+                                       font=('맑은 고딕', 9), padx=8, pady=5)
+        schedule_frame.pack(fill='x', pady=(0, 8))
+
+        schedule_row = tk.Frame(schedule_frame, bg='white')
+        schedule_row.pack(fill='x')
+
+        self.direct_schedule_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(schedule_row, text="예약발행", variable=self.direct_schedule_var,
+                      bg='white', font=('맑은 고딕', 9),
+                      command=self.toggle_direct_schedule).pack(side='left')
+
+        tk.Label(schedule_row, text="시간:", bg='white', font=('맑은 고딕', 9)).pack(side='left', padx=(10, 3))
+        self.direct_date_var = tk.StringVar()
+        self.direct_date_combo = ttk.Combobox(schedule_row, textvariable=self.direct_date_var,
+                                               state='disabled', width=12, font=('맑은 고딕', 9))
+        self.direct_date_combo.pack(side='left')
+
+        self.direct_hour_var = tk.StringVar(value='09')
+        self.direct_hour_combo = ttk.Combobox(schedule_row, textvariable=self.direct_hour_var,
+                                               state='disabled', width=4, font=('맑은 고딕', 9))
+        self.direct_hour_combo['values'] = [f'{i:02d}' for i in range(24)]
+        self.direct_hour_combo.pack(side='left', padx=(3, 0))
+
+        tk.Label(schedule_row, text=":", bg='white', font=('맑은 고딕', 9)).pack(side='left')
+        self.direct_minute_var = tk.StringVar(value='00')
+        self.direct_minute_combo = ttk.Combobox(schedule_row, textvariable=self.direct_minute_var,
+                                                 state='disabled', width=4, font=('맑은 고딕', 9))
+        self.direct_minute_combo['values'] = [f'{i:02d}' for i in range(0, 60, 10)]
+        self.direct_minute_combo.pack(side='left')
+
+        # 직접 입력 탭 날짜 콤보박스 초기화
+        self._init_direct_date_combo()
+
+        # 버튼
+        btn_frame = tk.Frame(main_frame, bg='white')
+        btn_frame.pack(fill='x', pady=(5, 0))
+
+        self.direct_register_btn = tk.Button(btn_frame, text="📥 등록",
+                                             command=self.register_direct_content,
+                                             bg='#4CAF50', fg='white', font=('맑은 고딕', 10, 'bold'),
+                                             relief='flat', cursor='hand2', padx=15, pady=6)
+        self.direct_register_btn.pack(side='left', padx=(0, 5))
+
+        tk.Button(btn_frame, text="🗑️ 초기화", command=self.clear_direct_input,
+                 bg='#FF9800', fg='white', font=('맑은 고딕', 10, 'bold'),
+                 relief='flat', cursor='hand2', padx=15, pady=6).pack(side='left')
+
+    def add_direct_single_marker(self):
+        """직접 입력 탭 - 단일 이미지 마커 추가"""
+        num = int(self.direct_single_marker_var.get())
+        marker = f"{{img:{num}}}"
+        self.direct_content_text.insert('insert', marker)
+
+    def add_direct_range_marker(self):
+        """직접 입력 탭 - 연속 이미지 마커 추가"""
+        s = int(self.direct_range_start_var.get())
+        e = int(self.direct_range_end_var.get())
+        marker = f"{{img:{s}-{e}}}"
+        self.direct_content_text.insert('insert', marker)
+
+    def _init_direct_date_combo(self):
+        """직접 입력 탭 날짜/시간 콤보박스 초기화"""
+        dates = self._get_date_list()
+        self.direct_date_combo['values'] = dates
+
+        rounded_date, rounded_hour, rounded_min = self._get_rounded_time()
+
+        if rounded_date not in dates:
+            dates.insert(0, rounded_date)
+            self.direct_date_combo['values'] = dates
+
+        self.direct_date_combo.set(rounded_date)
+        self.direct_hour_var.set(rounded_hour)
+        self.direct_minute_var.set(rounded_min)
+
+    def toggle_direct_schedule(self):
+        """직접 입력 탭 예약발행 토글"""
+        if self.direct_schedule_var.get():
+            self.direct_date_combo.config(state='readonly')
+            self.direct_hour_combo.config(state='readonly')
+            self.direct_minute_combo.config(state='readonly')
+        else:
+            self.direct_date_combo.config(state='disabled')
+            self.direct_hour_combo.config(state='disabled')
+            self.direct_minute_combo.config(state='disabled')
+
+    def get_direct_scheduled_time(self):
+        """직접 입력 탭에서 예약발행 시간 가져오기"""
+        if not self.direct_schedule_var.get():
+            return '즉시발행'
+
+        date = self.direct_date_var.get()
+        hour = int(self.direct_hour_var.get())
+        minute = int(self.direct_minute_var.get())
+
+        return f"{date} {hour:02d}:{minute:02d}"
+
+    def clear_direct_input(self):
+        """직접 입력 폼 초기화"""
+        self.direct_keyword_entry.delete(0, 'end')
+        self.direct_title_entry.delete(0, 'end')
+        self.direct_content_text.delete('1.0', 'end')
+        self.direct_schedule_var.set(False)
+        self.toggle_direct_schedule()
+        self._init_direct_date_combo()
+        self.show_info("입력 폼이 초기화되었습니다")
+
+    def register_direct_content(self):
+        """직접 입력 콘텐츠 등록"""
+        if not self.current_license:
+            self.show_error("먼저 라이선스를 확인하세요")
+            return
+
+        keyword = self.direct_keyword_entry.get().strip()
+        if not keyword:
+            self.show_error("키워드를 입력하세요")
+            return
+
+        title = self.direct_title_entry.get().strip()
+        if not title:
+            self.show_error("제목을 입력하세요")
+            return
+
+        content = self.direct_content_text.get('1.0', 'end').strip()
+        if not content:
+            self.show_error("본문을 입력하세요")
+            return
+
+        account_group = self.direct_account_group_var.get()
+        if account_group == '(선택안함)':
+            self.show_error("계정그룹을 선택하세요")
+            return
+
+        scheduled_time = self.get_direct_scheduled_time()
+
+        try:
+            self.show_working("콘텐츠 등록 중...")
+
+            self.content_mgr.add_content(
+                keyword=keyword,
+                title=title,
+                content=content,
+                license_key=self.current_license['license_key'],
+                account_group=account_group,
+                scheduled_time=scheduled_time
+            )
+
+            self.show_success("콘텐츠가 등록되었습니다!")
+            self.refresh_content_list()
+
+            # 입력 폼 초기화 (키워드와 계정그룹 유지)
+            self.direct_title_entry.delete(0, 'end')
+            self.direct_content_text.delete('1.0', 'end')
+
+        except Exception as e:
+            self.show_error(f"등록 실패: {str(e)[:30]}")
+
+    def create_url_tab(self, parent):
+        """URL 리라이팅 탭 (다중 링크 지원)"""
+        main_frame = tk.Frame(parent, bg='white', padx=10, pady=10)
+        main_frame.pack(fill='both', expand=True)
+
+        # 키워드 (필수)
+        kw_frame = tk.Frame(main_frame, bg='white')
+        kw_frame.pack(fill='x', pady=(0, 8))
+
+        tk.Label(kw_frame, text="키워드 (필수):", bg='white',
+                font=('맑은 고딕', 9, 'bold')).pack(side='left')
+        self.rss_keyword_entry = tk.Entry(kw_frame, font=('맑은 고딕', 9), width=25)
+        self.rss_keyword_entry.pack(side='left', padx=(5, 10))
+        tk.Label(kw_frame, text="※ RSS 검색어 / 콘텐츠 등록 키워드", bg='white',
+                font=('맑은 고딕', 8), fg='#888').pack(side='left')
+
+        # RSS 검색 섹션
+        rss_frame = tk.LabelFrame(main_frame, text=" RSS 검색 (선택) ", bg='white',
+                                  font=('맑은 고딕', 9), padx=8, pady=5)
+        rss_frame.pack(fill='x', pady=(0, 8))
+
+        rss_row = tk.Frame(rss_frame, bg='white')
+        rss_row.pack(fill='x')
+
+        tk.Label(rss_row, text="블로그 URL:", bg='white',
+                font=('맑은 고딕', 9)).pack(side='left')
+        self.url_entry = tk.Entry(rss_row, font=('맑은 고딕', 9), width=35)
+        self.url_entry.pack(side='left', padx=(5, 5))
+
+        tk.Button(rss_row, text="🔍 검색", command=self.search_rss_links,
                  bg='#2196F3', fg='white', font=('맑은 고딕', 9, 'bold'),
                  relief='flat', cursor='hand2', padx=10).pack(side='left')
 
-        # RSS 키워드
-        rss_row = tk.Frame(main_frame, bg='white')
-        rss_row.pack(fill='x', pady=(0, 8))
+        tk.Label(rss_frame, text="※ 키워드로 RSS 검색 후 링크 목록에 추가됩니다", bg='white',
+                font=('맑은 고딕', 8), fg='#888').pack(anchor='w', pady=(3, 0))
 
-        tk.Label(rss_row, text="RSS 키워드:", bg='white',
-                font=('맑은 고딕', 8), fg='#666').pack(side='left', padx=(0, 5))
+        # 링크 목록 (통합 텍스트 영역)
+        link_frame = tk.Frame(main_frame, bg='white')
+        link_frame.pack(fill='x', pady=(0, 8))
 
-        self.rss_keyword_entry = tk.Entry(rss_row, font=('맑은 고딕', 9), width=20)
-        self.rss_keyword_entry.pack(side='left')
-
-        # 미리보기 (편집 가능)
-        tk.Label(main_frame, text="가져온 글 (편집 가능):", bg='white',
+        tk.Label(link_frame, text="링크 목록 (한 줄에 하나씩, 자유롭게 편집 가능):", bg='white',
                 font=('맑은 고딕', 9)).pack(anchor='w')
 
-        self.url_preview = scrolledtext.ScrolledText(main_frame, height=6,
-                                                     font=('맑은 고딕', 9),
-                                                     wrap='word')
-        self.url_preview.pack(fill='x', pady=(3, 8))
+        self.url_links_text = scrolledtext.ScrolledText(link_frame, height=4,
+                                                        font=('맑은 고딕', 9),
+                                                        wrap='none')
+        self.url_links_text.pack(fill='x', pady=(3, 0))
 
-        # 추가 지시사항
-        tk.Label(main_frame, text="추가 지시사항:", bg='white',
+        # 커스텀 프롬프트
+        tk.Label(main_frame, text="커스텀 프롬프트 (선택):", bg='white',
                 font=('맑은 고딕', 9)).pack(anchor='w')
 
         self.custom_prompt_url = scrolledtext.ScrolledText(main_frame, height=2,
                                                           font=('맑은 고딕', 9),
                                                           wrap='word')
         self.custom_prompt_url.pack(fill='x', pady=(3, 8))
+
+        # 기존 호환용 (url_preview 제거, 새 로직에서 직접 처리)
+        self.url_preview = None
 
         # 옵션
         option_frame = tk.LabelFrame(main_frame, text=" 옵션 ", bg='white',
@@ -214,9 +468,9 @@ class ContentCreatorProV3:
         opt_row = tk.Frame(option_frame, bg='white')
         opt_row.pack(fill='x')
 
-        tk.Label(opt_row, text="생성:", bg='white', font=('맑은 고딕', 9)).pack(side='left')
+        tk.Label(opt_row, text="링크당 생성:", bg='white', font=('맑은 고딕', 9)).pack(side='left')
         self.url_count_var = tk.StringVar(value='1')
-        tk.Spinbox(opt_row, from_=1, to=50, width=4, textvariable=self.url_count_var,
+        tk.Spinbox(opt_row, from_=1, to=10, width=3, textvariable=self.url_count_var,
                   font=('맑은 고딕', 9)).pack(side='left', padx=(3, 8))
 
         tk.Label(opt_row, text="AI:", bg='white', font=('맑은 고딕', 9)).pack(side='left')
@@ -662,6 +916,21 @@ class ContentCreatorProV3:
         self.mgmt_notebook.add(edit_tab, text="  ✏️ 원고 수정  ")
         self.create_edit_tab(edit_tab)
 
+    def toggle_right_panel(self):
+        """오른쪽 패널 접기/펼치기 (창 크기 조절)"""
+        if self.right_panel_visible:
+            # 접기 - 오른쪽 패널 숨기고 창 크기 줄이기
+            self.right_frame.pack_forget()
+            self.toggle_btn.config(text="콘텐츠 목록 ▶")
+            self.root.geometry("600x900")
+        else:
+            # 펼치기 - 오른쪽 패널 보이고 창 크기 키우기
+            self.right_frame.pack(side='right', fill='both', expand=True)
+            self.toggle_btn.config(text="◀ 콘텐츠 목록")
+            self.root.geometry("1400x900")
+
+        self.right_panel_visible = not self.right_panel_visible
+
     def create_content_list_tab(self, parent):
         """콘텐츠 목록 탭"""
         filter_frame = tk.Frame(parent, bg='white')
@@ -907,6 +1176,7 @@ class ContentCreatorProV3:
             # 콤보박스 업데이트
             combo_values = ['(선택안함)'] + groups
 
+            self.direct_account_group_combo['values'] = combo_values
             self.url_account_group_combo['values'] = combo_values
             self.prompt_account_group_combo['values'] = combo_values
 
@@ -932,47 +1202,47 @@ class ContentCreatorProV3:
         except:
             pass
 
-    def fetch_from_url(self):
-        """URL에서 글 가져오기"""
+    def search_rss_links(self):
+        """RSS에서 키워드로 다중 링크 검색"""
         url = self.url_entry.get().strip()
-        rss_keyword = self.rss_keyword_entry.get().strip()
+        keyword = self.rss_keyword_entry.get().strip()
 
         if not url:
             self.show_error("블로그 URL을 입력하세요")
             return
 
-        self.show_working("블로그에서 글을 가져오는 중...")
+        if not keyword:
+            self.show_error("키워드를 입력하세요")
+            return
 
-        def fetch_thread():
+        self.show_working(f"RSS에서 '{keyword}' 검색 중...")
+
+        def search_thread():
             try:
-                if '/' in url.split('blog.naver.com/')[-1] and len(url.split('/')[-1]) > 5:
-                    result = self.crawler.parse_blog_post(url)
-                    content = f"[제목] {result['title']}\n\n{result['content_with_markers']}"
-                else:
-                    if not rss_keyword:
-                        raise Exception("RSS 검색 키워드를 입력하세요")
+                blog_id = self.crawler.get_blog_id_from_url(url)
+                if not blog_id:
+                    raise Exception("유효한 네이버 블로그 URL이 아닙니다")
 
-                    blog_id = self.crawler.get_blog_id_from_url(url)
-                    if not blog_id:
-                        raise Exception("유효한 네이버 블로그 URL이 아닙니다")
+                posts = self.crawler.find_posts_by_keyword(blog_id, keyword)
+                if not posts:
+                    raise Exception(f"'{keyword}'가 제목에 포함된 글을 찾을 수 없습니다")
 
-                    self.root.after(0, lambda: self.show_working(f"RSS에서 '{rss_keyword}' 검색 중..."))
+                # 링크 목록에 추가
+                def add_links():
+                    current = self.url_links_text.get('1.0', 'end').strip()
+                    new_links = '\n'.join([post['link'] for post in posts])
+                    if current:
+                        self.url_links_text.insert('end', '\n' + new_links)
+                    else:
+                        self.url_links_text.insert('1.0', new_links)
+                    self.show_success(f"{len(posts)}개 링크 추가됨")
 
-                    post = self.crawler.find_post_by_keyword(blog_id, rss_keyword)
-                    if not post:
-                        raise Exception(f"'{rss_keyword}'가 제목에 포함된 글을 찾을 수 없습니다")
-
-                    result = self.crawler.parse_blog_post(post['link'])
-                    content = f"[제목] {result['title']}\n\n{result['content_with_markers']}"
-
-                self.root.after(0, lambda: self.url_preview.delete('1.0', 'end'))
-                self.root.after(0, lambda: self.url_preview.insert('1.0', content))
-                self.root.after(0, lambda: self.show_success("글 가져오기 완료! (이미지 마커 수정 가능)"))
+                self.root.after(0, add_links)
 
             except Exception as e:
-                self.root.after(0, lambda: self.show_error(f"가져오기 실패: {str(e)[:50]}"))
+                self.root.after(0, lambda: self.show_error(f"검색 실패: {str(e)[:50]}"))
 
-        threading.Thread(target=fetch_thread, daemon=True).start()
+        threading.Thread(target=search_thread, daemon=True).start()
 
     def get_ai_instruction_suffix(self, char_limit='800'):
         """AI 지시사항 접미사"""
@@ -985,32 +1255,44 @@ class ContentCreatorProV3:
 4. 제목은 간결하고 명확하게 작성."""
 
     def start_url_generation(self):
-        """URL 리라이팅 생성 시작"""
+        """URL 리라이팅 생성 시작 (다중 링크 지원)"""
         if not self.current_license:
             self.show_error("먼저 라이선스를 확인하세요")
             return
 
-        original = self.url_preview.get('1.0', 'end').strip()
-        if not original:
-            self.show_error("먼저 글을 가져오세요")
+        # 키워드 필수 체크
+        keyword = self.rss_keyword_entry.get().strip()
+        if not keyword:
+            self.show_error("키워드를 입력하세요")
+            return
+
+        # 링크 목록 파싱
+        links_text = self.url_links_text.get('1.0', 'end').strip()
+        if not links_text:
+            self.show_error("링크를 입력하세요")
+            return
+
+        links = [line.strip() for line in links_text.split('\n') if line.strip()]
+        if not links:
+            self.show_error("유효한 링크가 없습니다")
             return
 
         try:
-            count = int(self.url_count_var.get())
-            if count < 1:
+            per_link_count = int(self.url_count_var.get())
+            if per_link_count < 1:
                 raise ValueError()
         except ValueError:
-            self.show_error("유효한 생성 개수를 입력하세요")
+            self.show_error("유효한 링크당 생성 개수를 입력하세요")
             return
 
+        total_count = len(links) * per_link_count
         remaining = self.current_license['api_limit'] - self.current_license['api_usage']
-        if count > remaining:
-            self.show_error(f"남은 사용량({remaining}개)보다 많이 생성할 수 없습니다")
+        if total_count > remaining:
+            self.show_error(f"남은 사용량({remaining}개)보다 많이 생성할 수 없습니다 (필요: {total_count}개)")
             return
 
         custom_prompt = self.custom_prompt_url.get('1.0', 'end').strip()
         ai_type = self.ai_var_url.get()
-        keyword = self.rss_keyword_entry.get().strip() or "키워드없음"
         account_group = self.url_account_group_var.get()
         if account_group == '(선택안함)':
             self.show_error("계정그룹을 선택하세요")
@@ -1026,63 +1308,89 @@ class ContentCreatorProV3:
         def generate_thread():
             success_count = 0
             fail_count = 0
+            content_index = 0  # 전체 콘텐츠 인덱스 (예약시간 계산용)
 
-            for i in range(count):
+            for link_idx, link in enumerate(links):
                 if self.stop_requested:
                     break
 
-                # 각 콘텐츠별 예약 시간 계산 (인덱스 기반)
-                scheduled_time = self.get_url_scheduled_time(index=i)
-
-                self.root.after(0, lambda idx=i, sc=success_count, st=scheduled_time: self.show_working(
-                    f"[{idx+1}/{count}] {ai_name} 리라이팅 중... (성공: {sc}개)" + (f" 예약: {st}" if st != '즉시발행' else "")
+                # 1. 링크에서 글 가져오기
+                self.root.after(0, lambda idx=link_idx: self.show_working(
+                    f"[링크 {idx+1}/{len(links)}] 글 가져오는 중..."
                 ))
 
                 try:
-                    generator = GeminiGenerator()
+                    result = self.crawler.parse_blog_post(link)
+                    original = f"[제목] {result['title']}\n\n{result['content_with_markers']}"
+                except Exception as e:
+                    fail_count += per_link_count
+                    print(f"❌ 링크 가져오기 실패 ({link}): {e}")
+                    continue
 
-                    if custom_prompt:
-                        # 추가 지시사항이 있으면 base_prompt 대체
-                        full_prompt = f"""{custom_prompt}
+                # 2. 링크당 per_link_count개 생성
+                for i in range(per_link_count):
+                    if self.stop_requested:
+                        break
+
+                    # 각 콘텐츠별 예약 시간 계산 (전체 인덱스 기반)
+                    scheduled_time = self.get_url_scheduled_time(index=content_index)
+
+                    self.root.after(0, lambda lidx=link_idx, idx=i, sc=success_count, st=scheduled_time: self.show_working(
+                        f"[링크 {lidx+1}/{len(links)}] [{idx+1}/{per_link_count}] {ai_name} 리라이팅 중... (성공: {sc}개)" +
+                        (f" 예약: {st}" if st != '즉시발행' else "")
+                    ))
+
+                    try:
+                        generator = GeminiGenerator()
+
+                        if custom_prompt:
+                            full_prompt = f"""{custom_prompt}
 {{img:숫자}}가 적힌 부분은 그대로 유지해야해.
 (#{i+1}번째 글 - 이전과 다른 관점으로)
 
 [중요 지시사항]
-1. 서식 금지: 제목이나 본문에 절대로 **, ##, ###, # 같은 마크다운 서식 사용 금지.
-2. 글 자체를 읽기 좋게 자연스럽게 작성. 굵은 글씨나 헤더 대신 문단 구분이나 테이블 형태의 표도 사용.
-3. 제목은 간결하고 명확하게 작성."""
-                    else:
-                        # 기본 프롬프트 (글자수 제한 없음)
-                        full_prompt = f"""글을 제공할건데, 글의 문단 및 구조는 비교하기 쉽게 그대로 제공해주고, 글의 말투 어미를 동일하게 바꾸는데, 조금 길게 바꿔주고, 조사도 중간중간 많이 바꿔줘. {{img:숫자}}가 적힌 부분은 그대로 유지해야해.
+1. 키워드 보호: '{keyword}'는 절대 번역, 음역, 괄호 추가 금지. 원문 철자 그대로 사용.
+   - 잘못된 예: jefferies → 제프리스, jefferies(제프리스), Jefferies
+   - 올바른 예: jefferies → jefferies (대소문자, 철자 동일하게 유지)
+2. 제목 수정: 원본 제목의 핵심 구조와 키워드는 유지하고, 일부 조사나 부가 단어만 변경.
+3. 서식 금지: 제목이나 본문에 절대로 **, ##, ###, # 같은 마크다운 서식 사용 금지.
+4. 본문은 읽기 좋게 자연스럽게 작성. 문단 구분이나 표 형태 활용."""
+                        else:
+                            full_prompt = f"""글을 제공할건데, 글의 문단 및 구조는 비교하기 쉽게 그대로 제공해주고, 글의 말투 어미를 동일하게 바꾸는데, 조금 길게 바꿔주고, 조사도 중간중간 많이 바꿔줘. {{img:숫자}}가 적힌 부분은 그대로 유지해야해.
 (#{i+1}번째 글)
 
 [중요 지시사항]
-1. 서식 금지: 제목이나 본문에 절대로 **, ##, ###, # 같은 마크다운 서식 사용 금지.
-2. 글 자체를 읽기 좋게 자연스럽게 작성. 굵은 글씨나 헤더 대신 문단 구분이나 테이블 형태의 표도 사용.
-3. 제목은 간결하고 명확하게 작성."""
+1. 키워드 보호: '{keyword}'는 절대 번역, 음역, 괄호 추가 금지. 원문 철자 그대로 사용.
+   - 잘못된 예: jefferies → 제프리스, jefferies(제프리스), Jefferies
+   - 올바른 예: jefferies → jefferies (대소문자, 철자 동일하게 유지)
+2. 제목 수정: 원본 제목의 핵심 구조와 키워드는 유지하고, 일부 조사나 부가 단어만 변경.
+3. 서식 금지: 제목이나 본문에 절대로 **, ##, ###, # 같은 마크다운 서식 사용 금지.
+4. 본문은 읽기 좋게 자연스럽게 작성. 문단 구분이나 표 형태 활용."""
 
-                    result = generator.generate_with_custom_prompt(
-                        user_prompt=full_prompt,
-                        original_text=original
-                    )
+                        gen_result = generator.generate_with_custom_prompt(
+                            user_prompt=full_prompt,
+                            original_text=original
+                        )
 
-                    self.content_mgr.add_content(
-                        keyword=keyword,
-                        title=result['title'],
-                        content=result['content'],
-                        license_key=self.current_license['license_key'],
-                        account_group=account_group,
-                        scheduled_time=scheduled_time
-                    )
+                        self.content_mgr.add_content(
+                            keyword=keyword,
+                            title=gen_result['title'],
+                            content=gen_result['content'],
+                            license_key=self.current_license['license_key'],
+                            account_group=account_group,
+                            scheduled_time=scheduled_time
+                        )
 
-                    self.license_mgr.increment_api_usage(self.current_license['license_key'])
-                    success_count += 1
+                        self.license_mgr.increment_api_usage(self.current_license['license_key'])
+                        success_count += 1
+                        content_index += 1
 
-                    self.root.after(0, self.refresh_content_list)
+                        self.root.after(0, self.refresh_content_list)
 
-                except Exception as e:
-                    fail_count += 1
-                    print(f"❌ 생성 실패 #{i+1}: {e}")
+                    except Exception as e:
+                        fail_count += 1
+                        content_index += 1
+                        print(f"❌ 생성 실패 (링크 {link_idx+1}, #{i+1}): {e}")
 
             self.root.after(0, lambda: self._generation_complete(success_count, fail_count, 'url'))
 

@@ -85,7 +85,7 @@ class NaverBlogCrawler:
 
     def find_post_by_keyword(self, blog_id, keyword):
         """
-        RSS에서 키워드가 제목에 포함된 글 찾기
+        RSS에서 키워드가 제목에 포함된 글 찾기 (첫 번째 매칭)
 
         Args:
             blog_id: 블로그 ID
@@ -103,6 +103,28 @@ class NaverBlogCrawler:
                 return entry
 
         return None
+
+    def find_posts_by_keyword(self, blog_id, keyword):
+        """
+        RSS에서 키워드가 제목에 포함된 모든 글 찾기
+
+        Args:
+            blog_id: 블로그 ID
+            keyword: 검색 키워드 (대소문자 구분 없음)
+
+        Returns:
+            list: [{'title': str, 'link': str, 'published': str}, ...]
+        """
+        entries = self.get_rss_feed(blog_id)
+
+        keyword_lower = keyword.lower()
+        matches = []
+
+        for entry in entries:
+            if keyword_lower in entry['title'].lower():
+                matches.append(entry)
+
+        return matches
 
     def parse_blog_post(self, post_url):
         """

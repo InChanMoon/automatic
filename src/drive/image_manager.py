@@ -1,7 +1,8 @@
 """
-Google Drive 이미지 매니저
+Google Drive 이미지 매니저 V2
 
 키워드별 이미지 폴더 관리 및 로컬 캐시 처리
+- 이미지 인덱스는 스프레드시트에 저장되어 영속성 보장
 """
 
 import os
@@ -23,7 +24,9 @@ class DriveImageManager:
         self,
         config_path: str = "config.json",
         credentials_path: str = "credentials/google_service_account.json",
-        cache_dir: str = "image_cache"
+        cache_dir: str = "image_cache",
+        settings_mgr=None,
+        group_name: str = None
     ):
         """
         초기화
@@ -32,6 +35,8 @@ class DriveImageManager:
             config_path: config.json 경로
             credentials_path: Service Account JSON 경로
             cache_dir: 로컬 이미지 캐시 폴더
+            settings_mgr: PublishSettingsManager 인스턴스 (인덱스 영속성용)
+            group_name: 그룹명 (인덱스 저장용)
         """
         # Config 로드
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -56,11 +61,31 @@ class DriveImageManager:
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
 
-        # 키워드별 이미지 세트 인덱스 (순환용)
-        # {'키워드': current_set_index}
+        # 스프레드시트 기반 인덱스 저장 (영속성)
+        self.settings_mgr = settings_mgr
+        self.group_name = group_name
+
+        # 메모리 캐시 (폴백용, settings_mgr 없을 때만 사용)
         self._keyword_set_index: Dict[str, int] = {}
 
         self.log_callback: Optional[Callable[[str], None]] = None
+
+    def set_group(self, group_name: str):
+        """그룹명 설정 (런타임에 변경 가능)"""
+        self.group_name = group_name
+
+    def _get_index(self, keyword: str) -> int:
+        """키워드 인덱스 가져오기 (스프레드시트 우선)"""
+        if self.settings_mgr and self.group_name:
+            return self.settings_mgr.get_image_index(self.group_name, keyword)
+        return self._keyword_set_index.get(keyword, 0)
+
+    def _set_index(self, keyword: str, index: int):
+        """키워드 인덱스 저장 (스프레드시트 우선)"""
+        if self.settings_mgr and self.group_name:
+            self.settings_mgr.set_image_index(self.group_name, keyword, index)
+        else:
+            self._keyword_set_index[keyword] = index
 
     def set_log_callback(self, callback: Callable[[str], None]):
         """로그 콜백 설정"""
@@ -274,8 +299,8 @@ class DriveImageManager:
         if not image_sets:
             return None
 
-        # 현재 인덱스 가져오기 (없으면 0)
-        current_index = self._keyword_set_index.get(keyword, 0)
+        # 현재 인덱스 가져오기 (스프레드시트 우선, 없으면 0)
+        current_index = self._get_index(keyword)
 
         # 순환
         if current_index >= len(image_sets):
@@ -283,8 +308,8 @@ class DriveImageManager:
 
         selected_set = image_sets[current_index]
 
-        # 다음 인덱스 저장
-        self._keyword_set_index[keyword] = current_index + 1
+        # 다음 인덱스 저장 (스프레드시트에 영속적으로 저장)
+        self._set_index(keyword, current_index + 1)
 
         self.log(f"이미지 세트 선택: {selected_set['name']} ({current_index + 1}/{len(image_sets)})")
 
@@ -389,12 +414,18 @@ class DriveImageManager:
         Args:
             keyword: 특정 키워드 (None이면 전체 초기화)
         """
-        if keyword:
-            self._keyword_set_index.pop(keyword, None)
-            self.log(f"키워드 '{keyword}' 인덱스 초기화")
+        if self.settings_mgr and self.group_name:
+            # 스프레드시트에서 초기화
+            self.settings_mgr.reset_image_index(self.group_name, keyword)
+            self.log(f"키워드 '{keyword or '전체'}' 인덱스 초기화 (스프레드시트)")
         else:
-            self._keyword_set_index.clear()
-            self.log("전체 키워드 인덱스 초기화")
+            # 메모리에서만 초기화
+            if keyword:
+                self._keyword_set_index.pop(keyword, None)
+                self.log(f"키워드 '{keyword}' 인덱스 초기화")
+            else:
+                self._keyword_set_index.clear()
+                self.log("전체 키워드 인덱스 초기화")
 
     def clear_cache(self, keyword: str = None):
         """
