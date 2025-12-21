@@ -37,9 +37,9 @@ class PublisherBot:
         self.account_mgr = AccountManager()
         self.settings_mgr = PublishSettingsManager()
 
-        # 이미지 매니저 초기화
+        # 이미지 매니저 초기화 (settings_mgr 연결로 인덱스 영속성 보장)
         try:
-            self.image_mgr = DriveImageManager()
+            self.image_mgr = DriveImageManager(settings_mgr=self.settings_mgr)
             if not self.image_mgr.test_connection():
                 self.image_mgr = None
         except:
@@ -77,6 +77,10 @@ class PublisherBot:
 
         tk.Button(top, text="잠금해제", command=self.force_release_locks,
                  bg='#FF9800', fg='white', font=('맑은 고딕', 8),
+                 relief='flat', padx=6, pady=2).pack(side='left', padx=1)
+
+        tk.Button(top, text="캡차계정", command=self.open_captcha_accounts,
+                 bg='#9C27B0', fg='white', font=('맑은 고딕', 8),
                  relief='flat', padx=6, pady=2).pack(side='left', padx=1)
 
         # 헤드리스 옵션
@@ -452,6 +456,141 @@ class PublisherBot:
         self.stop_btn.config(state='disabled')
         self.status_label.config(text="대기중", fg='#666')
         self.log("중지됨", 'warning')
+
+    def open_captcha_accounts(self):
+        """캡차 필요 계정 관리 다이얼로그"""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("캡차 필요 계정")
+        dlg.configure(bg='white')
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        # 메인 창 중앙에 위치
+        dlg.update_idletasks()
+        w, h = 400, 350
+        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        dlg.geometry(f"{w}x{h}+{x}+{y}")
+
+        # 설명
+        desc = tk.Label(dlg, text="캡차 필요 계정 목록\n수동 로그인 후 활성화하세요",
+                       bg='white', fg='#666', font=('맑은 고딕', 9))
+        desc.pack(pady=8)
+
+        # 트리뷰
+        tree_frame = tk.Frame(dlg, bg='white')
+        tree_frame.pack(fill='both', expand=True, padx=10, pady=5)
+
+        cols = ('group', 'account', 'status')
+        tree = ttk.Treeview(tree_frame, columns=cols, show='headings', height=10)
+        tree.heading('group', text='그룹')
+        tree.heading('account', text='계정 ID')
+        tree.heading('status', text='상태')
+        tree.column('group', width=100)
+        tree.column('account', width=150)
+        tree.column('status', width=80, anchor='center')
+
+        vsb = ttk.Scrollbar(tree_frame, orient='vertical', command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.pack(side='left', fill='both', expand=True)
+        vsb.pack(side='right', fill='y')
+
+        # 캡차 계정 목록 로드
+        def load_captcha_accounts():
+            tree.delete(*tree.get_children())
+            groups = self.account_mgr.get_account_groups()
+            count = 0
+            for grp in groups:
+                captcha_accs = self.account_mgr.get_captcha_accounts(grp)
+                for acc in captcha_accs:
+                    tree.insert('', 'end', values=(grp, acc['account_id'], '캡차필요'),
+                               tags=('captcha',))
+                    count += 1
+            tree.tag_configure('captcha', foreground='#9C27B0')
+            desc.config(text=f"캡차 필요 계정: {count}개\n수동 로그인 후 활성화하세요")
+
+        load_captcha_accounts()
+
+        # 버튼 영역
+        btn_frame = tk.Frame(dlg, bg='white')
+        btn_frame.pack(pady=10)
+
+        def manual_login():
+            """선택한 계정 수동 로그인"""
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("알림", "계정을 선택하세요")
+                return
+
+            vals = tree.item(sel[0])['values']
+            grp, acc_id = vals[0], vals[1]
+
+            # 계정 정보 가져오기
+            acc = self.account_mgr.get_account_by_id(grp, acc_id)
+            if not acc:
+                messagebox.showerror("오류", "계정 정보를 찾을 수 없습니다")
+                return
+
+            self.log(f"[{grp}] {acc_id} 수동 로그인 시작...", 'info')
+
+            # 브라우저 열기 (GUI 모드)
+            def do_login():
+                try:
+                    pub = NaverBlogPublisher(headless=False)
+                    pub.start_browser()
+
+                    # 로그인 페이지 이동
+                    pub.page.goto("https://nid.naver.com/nidlogin.login")
+                    time.sleep(2)
+
+                    # 아이디만 입력
+                    pub.page.click("#id")
+                    pub.page.keyboard.type(acc['account_id'], delay=50)
+
+                    messagebox.showinfo("수동 로그인",
+                        f"브라우저에서 비밀번호 입력 및 캡차를 해결해주세요.\n\n"
+                        f"로그인 완료 후 '확인' 버튼을 눌러주세요.")
+
+                    # 로그인 성공 여부 확인
+                    current_url = pub.page.url
+                    if "nid.naver.com" not in current_url:
+                        # 로그인 성공 - 쿠키 저장 및 상태 변경
+                        pub.save_cookies()
+                        self.account_mgr.mark_as_active(grp, acc_id)
+                        self.log(f"[{grp}] {acc_id} 수동 로그인 성공 → active 처리", 'success')
+                        self.root.after(0, load_captcha_accounts)
+                    else:
+                        self.log(f"[{grp}] {acc_id} 로그인 미완료", 'warning')
+
+                    pub.close_browser()
+                except Exception as e:
+                    self.log(f"수동 로그인 오류: {e}", 'error')
+
+            threading.Thread(target=do_login, daemon=True).start()
+
+        def activate_selected():
+            """선택한 계정 강제 활성화 (로그인 없이)"""
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("알림", "계정을 선택하세요")
+                return
+
+            vals = tree.item(sel[0])['values']
+            grp, acc_id = vals[0], vals[1]
+
+            if messagebox.askyesno("확인", f"'{acc_id}' 계정을 강제 활성화하시겠습니까?\n(로그인 없이 상태만 변경)"):
+                self.account_mgr.mark_as_active(grp, acc_id)
+                self.log(f"[{grp}] {acc_id} 강제 활성화", 'success')
+                load_captcha_accounts()
+
+        tk.Button(btn_frame, text="수동 로그인", command=manual_login,
+                 bg='#4CAF50', fg='white', font=('맑은 고딕', 9), relief='flat', padx=12).pack(side='left', padx=3)
+        tk.Button(btn_frame, text="강제 활성화", command=activate_selected,
+                 bg='#FF9800', fg='white', font=('맑은 고딕', 9), relief='flat', padx=12).pack(side='left', padx=3)
+        tk.Button(btn_frame, text="새로고침", command=load_captcha_accounts,
+                 bg='#2196F3', fg='white', font=('맑은 고딕', 9), relief='flat', padx=12).pack(side='left', padx=3)
+        tk.Button(btn_frame, text="닫기", command=dlg.destroy,
+                 bg='#666', fg='white', font=('맑은 고딕', 9), relief='flat', padx=12).pack(side='left', padx=3)
 
 
 def main():

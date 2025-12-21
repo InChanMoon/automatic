@@ -5,7 +5,8 @@ Gemini API 콘텐츠 생성기
 """
 
 import json
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 
 class GeminiGenerator:
@@ -23,9 +24,14 @@ class GeminiGenerator:
 
         api_key = config['gemini_api']['api_key']
 
-        # Gemini API 설정
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.5-flash')  # 최신 안정 버전 (2025년 6월)
+        # 새 SDK 클라이언트 생성
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = 'gemini-2.5-flash'
+
+        # Thinking 모드 비활성화 설정
+        self.config = types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_budget=0)
+        )
 
     def generate_blog_post(self, keyword):
         """
@@ -68,7 +74,11 @@ class GeminiGenerator:
 """
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=self.config
+            )
             text = response.text
 
             # 제목과 본문 분리
@@ -142,7 +152,11 @@ class GeminiGenerator:
 """
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=self.config
+            )
             text = response.text
 
             # 제목과 본문 분리
@@ -216,7 +230,11 @@ class GeminiGenerator:
 """
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=self.config
+            )
             return response.text.strip()
 
         except Exception as e:

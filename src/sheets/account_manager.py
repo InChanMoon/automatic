@@ -3,13 +3,13 @@
 
 계정 그룹별 관리:
 - 계정 그룹별 계정 목록 조회 (계정_사기, 계정_현금화 등)
-- 계정 상태 관리 (active/suspended/banned)
+- 계정 상태 관리 (active/suspended/banned/captcha)
 - 계정 로테이션 (last_used 기준)
 
 컬럼 구조 (간소화):
 - A: account_id (네이버 ID)
 - B: password
-- C: status (active/suspended/banned)
+- C: status (active/suspended/banned/captcha)
 - D: last_used (마지막 사용 시간)
 """
 
@@ -28,8 +28,9 @@ class AccountManager(SheetsBase):
 
     # 계정 상태값
     STATUS_ACTIVE = 'active'        # 활성
-    STATUS_SUSPENDED = 'suspended'  # 일시정지
+    STATUS_SUSPENDED = 'suspended'  # 보호조치 (영구 사용 불가)
     STATUS_BANNED = 'banned'        # 영구정지
+    STATUS_CAPTCHA = 'captcha'      # 캡차 필요 (수동 로그인 대기)
 
     def __init__(self):
         """초기화"""
@@ -244,7 +245,8 @@ class AccountManager(SheetsBase):
             'total': len(accounts),
             'active': 0,
             'suspended': 0,
-            'banned': 0
+            'banned': 0,
+            'captcha': 0
         }
 
         for acc in accounts:
@@ -254,6 +256,8 @@ class AccountManager(SheetsBase):
                 stats['suspended'] += 1
             elif acc['status'] == self.STATUS_BANNED:
                 stats['banned'] += 1
+            elif acc['status'] == self.STATUS_CAPTCHA:
+                stats['captcha'] += 1
 
         return stats
 
@@ -266,6 +270,58 @@ class AccountManager(SheetsBase):
         """
         groups = self.get_account_groups()
         return {group: self.get_group_stats(group) for group in groups}
+
+    def get_captcha_accounts(self, group_name):
+        """
+        캡차 필요 상태의 계정 목록 가져오기
+
+        Args:
+            group_name: 그룹명
+
+        Returns:
+            list: captcha 상태 계정 리스트
+        """
+        accounts = self.get_accounts_by_group(group_name, active_only=False)
+        return [acc for acc in accounts if acc['status'] == self.STATUS_CAPTCHA]
+
+    def mark_as_captcha(self, group_name, account_id):
+        """
+        계정을 캡차 필요 상태로 변경
+
+        Args:
+            group_name: 그룹명
+            account_id: 계정 ID
+
+        Returns:
+            bool: 성공 여부
+        """
+        return self.update_status(group_name, account_id, self.STATUS_CAPTCHA)
+
+    def mark_as_suspended(self, group_name, account_id):
+        """
+        계정을 보호조치 상태로 변경
+
+        Args:
+            group_name: 그룹명
+            account_id: 계정 ID
+
+        Returns:
+            bool: 성공 여부
+        """
+        return self.update_status(group_name, account_id, self.STATUS_SUSPENDED)
+
+    def mark_as_active(self, group_name, account_id):
+        """
+        계정을 활성 상태로 변경 (수동 로그인 후)
+
+        Args:
+            group_name: 그룹명
+            account_id: 계정 ID
+
+        Returns:
+            bool: 성공 여부
+        """
+        return self.update_status(group_name, account_id, self.STATUS_ACTIVE)
 
 
 # 테스트

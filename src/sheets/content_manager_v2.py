@@ -57,22 +57,28 @@ class ContentManagerV2(SheetsBase):
         """사용자 시트가 없으면 생성"""
         sheet_name = self._get_user_sheet_name(license_key)
 
-        try:
-            # 시트 존재 확인
-            self.read_range(f'{sheet_name}!A1:J1')
+        # 먼저 시트 목록에서 존재 여부 확인
+        all_sheets = self.get_all_sheet_names()
+        if sheet_name in all_sheets:
             return sheet_name
-        except Exception:
-            # 시트가 없으면 생성
-            try:
-                self._create_sheet_with_headers(sheet_name)
-                print(f"✅ '{sheet_name}' 시트 자동 생성 완료")
+
+        # 시트가 없으면 생성
+        try:
+            self._create_sheet_with_headers(sheet_name)
+            print(f"✅ '{sheet_name}' 시트 자동 생성 완료")
+            return sheet_name
+        except Exception as e:
+            error_msg = str(e)
+            # 이미 존재하는 경우 (동시성 문제로 다른 프로세스가 먼저 생성)
+            if 'already exists' in error_msg:
+                print(f"ℹ️ '{sheet_name}' 시트가 이미 존재합니다.")
                 return sheet_name
-            except Exception as e:
-                print(f"⚠️ 시트 생성 실패: {e}")
-                # 수동 생성 안내
-                print(f"   수동으로 '{sheet_name}' 시트를 생성하세요.")
-                print(f"   헤더: {', '.join(self.HEADERS)}")
-                raise
+            # 다른 에러는 경고만 출력하고 계속 진행
+            print(f"⚠️ 시트 생성 실패: {e}")
+            print(f"   수동으로 '{sheet_name}' 시트를 생성하세요.")
+            print(f"   헤더: {', '.join(self.HEADERS)}")
+            # 예외를 던지지 않고 시트 이름 반환 시도 (이미 있을 수 있음)
+            return sheet_name
 
     def _create_sheet_with_headers(self, sheet_name):
         """새 시트 생성 후 헤더 추가 및 서식 설정"""

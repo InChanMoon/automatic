@@ -20,6 +20,9 @@ from datetime import datetime
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext
 from playwright_stealth import stealth_sync
 import pyperclip
+import google.generativeai as genai
+from PIL import Image
+import base64
 
 # Windows 클립보드 이미지 지원
 if sys.platform == 'win32':
@@ -40,6 +43,11 @@ SELECTORS = {
     "id_input": "#id",
     "pw_input": "#pw",
     "login_button": "#log\\.login",
+
+    # 캡차
+    "captcha_image": "#captchaimg",
+    "captcha_input": "#captcha",
+    "captcha_question": ".captcha_question, .question_text, #question",
 
     # 글쓰기 페이지
     "main_frame": "#mainFrame",
@@ -94,6 +102,25 @@ class NaverBlogPublisher:
         self.current_blog_id = None
         self.log_callback: Optional[Callable[[str], None]] = None
         self.stop_requested = False  # 중지 요청 플래그
+
+        # 캡차 풀이용 Gemini 초기화
+        self.gemini_model = None
+        self._init_gemini()
+
+    def _init_gemini(self):
+        """캡차 풀이용 Gemini 초기화 (실패해도 발행에 영향 없음)"""
+        try:
+            config_path = "config.json"
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                api_key = config.get('gemini_api', {}).get('api_key')
+                if api_key:
+                    genai.configure(api_key=api_key)
+                    self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+        except:
+            # Gemini 없어도 발행은 가능, 캡차만 수동 필요
+            self.gemini_model = None
 
     def request_stop(self):
         """중지 요청 - 브라우저 강제 종료"""
@@ -227,6 +254,196 @@ class NaverBlogPublisher:
             self.log(f"쿠키 로드 실패: {e}")
             return False
 
+    def detect_captcha(self) -> bool:
+        """캡차 존재 여부 확인"""
+        try:
+            # 캡차 입력창 확인 (타임아웃 짧게)
+            captcha_input = self.page.locator("input#captcha, input[name='captcha']")
+            if captcha_input.count() > 0:
+                return True
+
+            # 캡차 이미지 확인
+            captcha_img = self.page.locator("#captchaimg, .captcha_image, img[alt*='captcha']")
+            if captcha_img.count() > 0:
+                return True
+
+            # 캡차 질문 텍스트 확인 (간단한 텍스트 검색)
+            try:
+                body_text = self.page.locator("body").inner_text(timeout=3000)
+                if "정답을 입력해주세요" in body_text or "자동입력 방지" in body_text:
+                    return True
+            except:
+                pass
+
+            return False
+        except:
+            return False
+
+    def solve_captcha(self, password: str = "") -> bool:
+        """AI로 캡차 풀이 시도
+
+        Args:
+            password: 비밀번호 (캡차 풀이 후 재입력 필요시)
+
+        Returns:
+            bool: 캡차 풀이 성공 여부
+        """
+        if not self.gemini_model:
+            self.log("Gemini 모델이 초기화되지 않아 캡차 풀이 불가")
+            return False
+
+        self._captcha_password = password  # 비밀번호 임시 저장
+
+        try:
+            self.log("캡차 감지됨 - AI 풀이 시도...")
+
+            # 1. 질문 텍스트 추출 (빨간색 글씨)
+            question = ""
+            try:
+                page_text = self.page.inner_text("body")
+
+                # 다양한 질문 패턴
+                patterns = [
+                    r'(가장\s*가격이\s*[싼비][^?]*\?)',
+                    r'(가장\s*[싼비싸][^?]*가격[^?]*\?)',
+                    r'(총[^?]*몇\s*개[^?]*\?)',
+                    r'(총[^?]*얼마[^?]*\?)',
+                    r'([가-힣]+의\s*가격은[^?]*\?)',
+                    r'([가-힣]+\s*제품의[^?]*\?)',
+                    r'(한\s*개\s*당\s*가격[^?]*\?)',
+                    r'(몇\s*개[^?]*있[^?]*\?)',
+                ]
+
+                for pattern in patterns:
+                    match = re.search(pattern, page_text)
+                    if match:
+                        question = match.group(0)
+                        break
+
+                # 패턴으로 못 찾으면 "?" 포함된 문장 찾기
+                if not question:
+                    sentences = re.findall(r'[^.!?\n]*\?', page_text)
+                    for s in sentences:
+                        if any(kw in s for kw in ['가격', '얼마', '물건', '제품', '몇']):
+                            question = s.strip()
+                            break
+
+            except Exception as e:
+                self.log(f"질문 추출 실패: {e}")
+
+            self.log(f"캡차 질문: {question if question else '(이미지에서 직접 확인)'}")
+
+            # 2. 전체 페이지 스크린샷 (질문+이미지 함께 캡처)
+            captcha_path = "captcha_temp.png"
+            self.page.screenshot(path=captcha_path)
+
+            # 3. Gemini로 풀이
+            img = Image.open(captcha_path)
+
+            # 질문이 추출되었으면 해당 질문 사용, 아니면 이미지에서 찾도록
+            if question:
+                prompt = f"""이 네이버 로그인 캡차 이미지에서 질문에 답하세요.
+
+질문: {question}
+
+규칙:
+- 답만 간결하게 (단위, 설명, 마침표 없이)
+- 숫자면 숫자만 (예: 700)
+- 텍스트면 텍스트만"""
+            else:
+                prompt = """이 네이버 로그인 캡차 이미지를 보세요.
+이미지에 영수증/표와 빨간색 질문이 있습니다.
+빨간색 질문을 읽고, 영수증/표를 분석해서 답을 구하세요.
+
+규칙:
+- 답만 간결하게 (단위, 설명, 마침표 없이)
+- 숫자면 숫자만 (예: 700)
+- 텍스트면 텍스트만"""
+
+            response = self.gemini_model.generate_content([prompt, img])
+            answer = response.text.strip()
+
+            # 불필요한 문자 제거
+            answer = answer.replace("원", "").replace("개", "").replace(".", "").strip()
+
+            self.log(f"캡차 답변: {answer}")
+
+            # 4. 답 입력 (type()으로 한 글자씩 입력 - 봇 감지 우회)
+            # 다양한 캡차 입력창 셀렉터 시도
+            captcha_selectors = [
+                "input[placeholder*='정답']",
+                "input#captcha",
+                "input[name='captcha']",
+                "input.input_captcha",
+                "#captcha",
+            ]
+            captcha_input = None
+            for selector in captcha_selectors:
+                loc = self.page.locator(selector)
+                if loc.count() > 0:
+                    captcha_input = loc.first
+                    self.log(f"캡차 입력창 발견: {selector}")
+                    break
+
+            if not captcha_input:
+                # 모든 input 태그 중 빈 것 찾기
+                all_inputs = self.page.locator("input[type='text'], input:not([type])")
+                for i in range(all_inputs.count()):
+                    inp = all_inputs.nth(i)
+                    placeholder = inp.get_attribute("placeholder") or ""
+                    if "정답" in placeholder or "입력" in placeholder:
+                        captcha_input = inp
+                        self.log(f"캡차 입력창 발견 (placeholder: {placeholder})")
+                        break
+
+            if captcha_input:
+                # JavaScript로 직접 값 설정 (봇 탐지 우회)
+                self.page.evaluate(f'''
+                    const captchaInput = document.querySelector("input[placeholder*='정답']");
+                    if (captchaInput) {{
+                        captchaInput.value = "{answer}";
+                        captchaInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        captchaInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                ''')
+                self.log(f"캡차 답 입력: {answer}")
+                self._random_delay(0.3, 0.5)
+
+                # 비밀번호도 JavaScript로 입력
+                if self._captcha_password:
+                    pw_escaped = self._captcha_password.replace("\\", "\\\\").replace("'", "\\'")
+                    self.page.evaluate(f'''
+                        const pwInput = document.querySelector("#pw");
+                        if (pwInput) {{
+                            pwInput.value = '{pw_escaped}';
+                            pwInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            pwInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        }}
+                    ''')
+                    self.log("비밀번호 재입력 완료")
+                    self._random_delay(0.3, 0.5)
+
+                # 로그인 버튼 다시 클릭
+                self.page.click(SELECTORS["login_button"])
+                self._random_delay(2, 3)
+
+                # 디버깅용으로 마지막 캡차 이미지 보존 (captcha_last.png)
+                try:
+                    import shutil
+                    shutil.copy(captcha_path, "captcha_last.png")
+                    os.remove(captcha_path)
+                except:
+                    pass
+
+                return True
+            else:
+                self.log("캡차 입력창을 찾을 수 없음")
+                return False
+
+        except Exception as e:
+            self.log(f"캡차 풀이 오류: {e}")
+            return False
+
     def check_account_protection(self) -> Dict:
         """아이디 보호조치(잠금) 상태 확인
 
@@ -234,13 +451,27 @@ class NaverBlogPublisher:
             dict: {is_protected: bool, reason: str}
         """
         try:
-            # 보호조치 페이지 감지
+            current_url = self.page.url
+
+            # URL 기반 보호조치 감지
+            protection_urls = [
+                "protect",
+                "security",
+                "restriction"
+            ]
+            for url_indicator in protection_urls:
+                if url_indicator in current_url.lower():
+                    self.log(f"[경고] 보호조치 URL 감지: {current_url}")
+                    return {'is_protected': True, 'reason': f'보호조치 URL: {current_url}'}
+
+            # 페이지 콘텐츠 감지
             page_content = self.page.content()
 
             # 보호조치 키워드 확인
             protection_indicators = [
+                "보호 조치",
+                "보호조치",
                 "비정상적인 활동이 감지되어",
-                "아이디를 보호(잠금) 조치중입니다",
                 "스팸성 홍보활동",
                 "서비스 이용이 제한"
             ]
@@ -311,13 +542,54 @@ class NaverBlogPublisher:
 
             except:
                 current_url = self.page.url
+                self.log(f"로그인 확인 중... URL: {current_url}")
+
+                # 다시 보호조치 확인
+                protection = self.check_account_protection()
+                if protection['is_protected']:
+                    return {'success': False, 'protected': True, 'reason': protection['reason']}
+
                 if "nid.naver.com" in current_url:
-                    # 다시 보호조치 확인
-                    protection = self.check_account_protection()
-                    if protection['is_protected']:
-                        return {'success': False, 'protected': True, 'reason': protection['reason']}
-                    self.log("로그인 실패 - 캡차 또는 잘못된 인증정보")
-                    return {'success': False, 'protected': False, 'reason': '캡차 또는 잘못된 인증정보'}
+                    # 캡차 감지 및 풀이 시도
+                    if self.detect_captcha():
+                        self.log("캡차 감지됨")
+
+                        # 최대 3번 캡차 풀이 시도
+                        for attempt in range(3):
+                            self.log(f"캡차 풀이 시도 {attempt + 1}/3")
+
+                            if self.solve_captcha(password=naver_pw):
+                                # 로그인 성공 여부 확인
+                                self._random_delay(2, 3)
+                                try:
+                                    self.page.wait_for_url(
+                                        lambda url: "nid.naver.com" not in url,
+                                        timeout=10000
+                                    )
+                                    self.is_logged_in = True
+                                    self.log("캡차 풀이 성공 - 로그인 완료!")
+                                    self.save_cookies()
+                                    return {'success': True, 'protected': False, 'reason': ''}
+                                except:
+                                    # 여전히 로그인 페이지면 캡차 틀렸을 수 있음
+                                    if not self.detect_captcha():
+                                        # 캡차가 없으면 다른 문제
+                                        break
+                                    self.log("캡차 답이 틀린 것 같음, 재시도...")
+                            else:
+                                break
+
+                        self.log("캡차 풀이 실패")
+                        return {'success': False, 'protected': False, 'reason': '캡차 풀이 실패'}
+
+                    # 캡차도 아니면 인증정보 문제
+                    try:
+                        self.page.screenshot(path="debug_login_failed.png")
+                        self.log("디버그 스크린샷 저장: debug_login_failed.png")
+                    except:
+                        pass
+                    self.log("로그인 실패 - 잘못된 인증정보")
+                    return {'success': False, 'protected': False, 'reason': '잘못된 인증정보'}
                 else:
                     self.is_logged_in = True
                     self.save_cookies()
@@ -528,12 +800,22 @@ class NaverBlogPublisher:
                 content_locator.click()
                 self._random_delay(0.3, 0.7)
 
-                if images and HAS_WIN32_CLIPBOARD:
-                    # 이미지 포함 입력 (클립보드 붙여넣기 방식)
-                    update_progress("본문 + 이미지 입력 중...", 45)
-                    self._input_content_with_images(content, images, update_progress)
+                if images:
+                    if self.headless:
+                        # 헤드리스 모드: file input 방식으로 이미지 업로드
+                        update_progress("본문 + 이미지 입력 중 (헤드리스)...", 45)
+                        self._input_content_with_images_headless(content, images, update_progress, frame)
+                    elif HAS_WIN32_CLIPBOARD:
+                        # 일반 모드: 클립보드 붙여넣기 방식
+                        update_progress("본문 + 이미지 입력 중...", 45)
+                        self._input_content_with_images(content, images, update_progress)
+                    else:
+                        # 클립보드 미지원 -> 마커 제거 후 텍스트만 입력
+                        self.log("클립보드 미지원: 이미지 삽입 불가, 텍스트만 입력")
+                        processed_content = self._remove_image_markers(content)
+                        self._input_long_text(processed_content)
                 else:
-                    # 이미지 없거나 클립보드 미지원 -> 마커 제거 후 텍스트만 입력
+                    # 이미지 없음 -> 마커 제거 후 텍스트만 입력
                     processed_content = self._remove_image_markers(content)
                     self._input_long_text(processed_content)
 
@@ -588,22 +870,36 @@ class NaverBlogPublisher:
 
             self._random_delay(1, 2)
 
-            # 발행 확인 버튼 클릭
+            # 발행 확인 버튼 클릭 (iframe 내부에 있음)
             update_progress("발행 확인 중...", 90)
             try:
+                # 발행 팝업은 iframe 내부에 있음
                 confirm_btn = frame.locator(SELECTORS["publish_confirm"])
                 confirm_btn.wait_for(state="visible", timeout=15000)
                 self._random_delay(1, 2)
 
-                # 헤드리스 모드: force 클릭 사용
+                # 헤드리스 모드: JavaScript 클릭 사용
                 if self.headless:
                     self.log("헤드리스 모드: 발행 확인 버튼 클릭 시도...")
-                    confirm_btn.scroll_into_view_if_needed()
-                    self._random_delay(0.5, 1)
-                    confirm_btn.click(force=True)
-                    self.log("발행 확인 버튼 클릭 완료")
+                    try:
+                        # iframe 내부에서 JavaScript 클릭
+                        if hasattr(frame, 'evaluate'):
+                            # frame이 FrameLocator인 경우
+                            frame.locator(SELECTORS["publish_confirm"]).evaluate('el => el.click()')
+                        else:
+                            # frame이 Page인 경우
+                            frame.evaluate(f'''
+                                document.querySelector("{SELECTORS["publish_confirm"]}").click();
+                            ''')
+                        self.log("발행 확인 버튼 클릭 완료 (JS)")
+                    except Exception as js_err:
+                        # JavaScript 실패시 force 클릭 시도
+                        self.log(f"JS 클릭 실패, force 클릭 시도: {js_err}")
+                        confirm_btn.click(force=True)
+                        self.log("발행 확인 버튼 클릭 완료 (force)")
                 else:
                     confirm_btn.click()
+                    self.log("발행 확인 버튼 클릭 완료")
 
                 update_progress("발행 확인 버튼 클릭", 95)
             except Exception as e:
@@ -1080,6 +1376,150 @@ class NaverBlogPublisher:
                     self._random_delay(0.03, 0.08)
 
         self.log(f"총 {inserted_images}개 이미지 삽입 완료")
+
+    def _input_content_with_images_headless(
+        self,
+        content: str,
+        images: List[str],
+        update_progress,
+        frame
+    ):
+        """
+        본문 입력 + 이미지 삽입 (헤드리스 모드용 - file input 방식)
+
+        Args:
+            content: 본문 내용 (이미지 마커 포함: {img:1}, {img:1-5})
+            images: 이미지 파일 경로 리스트
+            update_progress: 진행률 콜백
+            frame: iframe 프레임 로케이터
+        """
+        # 이미지 마커 패턴: {img:1}, {img:1-5}
+        marker_pattern = r'\{img:(\d+)(?:-(\d+))?\}'
+
+        image_count = len(images)
+        inserted_images = 0
+
+        # 마커 정보 수집 (위치와 범위)
+        markers = []
+        for match in re.finditer(marker_pattern, content):
+            start_num = int(match.group(1))
+            end_num = int(match.group(2)) if match.group(2) else start_num
+            markers.append({
+                'full_match': match.group(0),
+                'start': start_num,
+                'end': end_num,
+                'pos': match.start()
+            })
+
+        if not markers:
+            # 마커가 없으면 텍스트만 입력
+            self._input_long_text(content)
+            return
+
+        # 본문을 마커 위치 기준으로 처리
+        last_pos = 0
+        for marker in markers:
+            # 마커 앞의 텍스트 입력
+            text_before = content[last_pos:marker['pos']]
+            if text_before:
+                lines = text_before.split('\n')
+                for i, line in enumerate(lines):
+                    if line.strip():
+                        # 헤드리스 모드에서는 직접 타이핑
+                        self.page.keyboard.type(line, delay=10)
+                        self._random_delay(0.05, 0.1)
+
+                    if i < len(lines) - 1:
+                        self.page.keyboard.press("Enter")
+                        self._random_delay(0.03, 0.08)
+
+            # 마커 위치에 이미지 삽입 (file input 방식)
+            for idx, img_num in enumerate(range(marker['start'], marker['end'] + 1)):
+                if img_num <= image_count:
+                    img_path = images[img_num - 1]  # 1-based to 0-based
+
+                    if os.path.exists(img_path):
+                        # 첫 번째 이미지 앞에만 줄바꿈 추가
+                        if idx == 0:
+                            self.page.keyboard.press("Enter")
+                            self._random_delay(0.2, 0.4)
+
+                        # 이미지 삽입
+                        inserted_images += 1
+                        update_progress(f"이미지 {inserted_images} 삽입 중...", 50 + inserted_images * 3)
+
+                        if self._insert_image_via_file_input(img_path, frame):
+                            self.log(f"이미지 {img_num} 삽입: {os.path.basename(img_path)}")
+                        else:
+                            self.log(f"이미지 {img_num} 삽입 실패")
+
+                        self._random_delay(0.3, 0.6)
+
+            last_pos = marker['pos'] + len(marker['full_match'])
+
+        # 마지막 마커 뒤의 텍스트 입력
+        remaining_text = content[last_pos:]
+        if remaining_text:
+            lines = remaining_text.split('\n')
+            for i, line in enumerate(lines):
+                if line.strip():
+                    self.page.keyboard.type(line, delay=10)
+                    self._random_delay(0.05, 0.1)
+
+                if i < len(lines) - 1:
+                    self.page.keyboard.press("Enter")
+                    self._random_delay(0.03, 0.08)
+
+        self.log(f"총 {inserted_images}개 이미지 삽입 완료 (헤드리스)")
+
+    def _insert_image_via_file_input(self, image_path: str, frame) -> bool:
+        """
+        file input을 통한 이미지 삽입 (헤드리스 모드용)
+
+        Args:
+            image_path: 이미지 파일 경로
+            frame: iframe 프레임 로케이터
+
+        Returns:
+            성공 여부
+        """
+        try:
+            abs_path = os.path.abspath(image_path)
+
+            # file input이 이미 있는지 확인
+            file_input = frame.locator('input[type="file"]')
+            input_count = file_input.count()
+
+            if input_count == 0:
+                # file input이 없으면 사진 버튼 클릭
+                photo_btn = frame.locator('button[data-name="image"]')
+                if photo_btn.count() > 0:
+                    photo_btn.first.click(force=True)
+                    self._random_delay(1.5, 2.5)
+
+                    # file input 다시 찾기
+                    file_input = frame.locator('input[type="file"]')
+                    input_count = file_input.count()
+
+            if input_count > 0:
+                # 파일 설정
+                file_input.first.set_input_files(abs_path)
+                self._random_delay(3, 5)  # 업로드 완료 대기
+
+                # 이미지 컴포넌트 확인
+                img_components = frame.locator('.se-component-image, .se-image-resource')
+                if img_components.count() > 0:
+                    return True
+                else:
+                    self.log("이미지 컴포넌트가 생성되지 않음")
+                    return True  # 업로드는 됐을 수 있음
+            else:
+                self.log("file input을 찾을 수 없음")
+                return False
+
+        except Exception as e:
+            self.log(f"file input 이미지 삽입 오류: {e}")
+            return False
 
     def _remove_image_markers(self, content: str) -> str:
         """이미지 마커 제거"""

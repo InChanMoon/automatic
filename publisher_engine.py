@@ -10,6 +10,7 @@ API 호출 최소화 버전:
 import time
 import random
 import os
+import threading
 from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
@@ -199,12 +200,14 @@ class PublisherEngine:
         try:
             self.content_mgr.mark_as_publishing(content['sheet_name'], content['row_num'])
 
-            # 이미지 준비
+            # 이미지 준비 (그룹 설정 후 인덱스 저장됨)
             images = []
             cnt = self._count_markers(content['content'])
             if cnt > 0 and self.image_mgr:
                 kw = content.get('keyword', '')
                 if kw:
+                    # 그룹 설정 (인덱스 저장용)
+                    self.image_mgr.set_group(grp)
                     images = self.image_mgr.get_images_for_post(kw, cnt)
 
             # 브라우저 시작
@@ -227,18 +230,31 @@ class PublisherEngine:
             # 쿠키 실패 -> 비밀번호 로그인
             if not login_result.get('success'):
                 if login_result.get('protected'):
+                    # 보호조치: 계정 상태를 suspended로 변경
+                    self.account_mgr.mark_as_suspended(grp, acc['account_id'])
+                    self.log(f"[{grp}] 계정 '{acc['account_id']}' 보호조치 → suspended 처리", 'warning')
+                    self.content_mgr.release_publishing_lock(content['sheet_name'], content['row_num'])
                     pub.close_browser()
                     return {'success': False, 'protected': True, 'error': login_result.get('reason', '보호조치')}
 
                 login_result = pub.login_with_credentials(acc['account_id'], acc['password'])
                 if login_result.get('protected'):
+                    # 보호조치: 계정 상태를 suspended로 변경
+                    self.account_mgr.mark_as_suspended(grp, acc['account_id'])
+                    self.log(f"[{grp}] 계정 '{acc['account_id']}' 보호조치 → suspended 처리", 'warning')
+                    self.content_mgr.release_publishing_lock(content['sheet_name'], content['row_num'])
                     pub.close_browser()
                     return {'success': False, 'protected': True, 'error': login_result.get('reason', '보호조치')}
 
                 if not login_result.get('success'):
-                    self.content_mgr.mark_as_failed(content['sheet_name'], content['row_num'])
+                    reason = login_result.get('reason', '')
+                    # 캡차 감지: 계정 상태를 captcha로 변경
+                    if '캡차' in reason:
+                        self.account_mgr.mark_as_captcha(grp, acc['account_id'])
+                        self.log(f"[{grp}] 계정 '{acc['account_id']}' 캡차 필요 → captcha 처리", 'warning')
+                    self.content_mgr.release_publishing_lock(content['sheet_name'], content['row_num'])
                     pub.close_browser()
-                    return {'success': False, 'protected': False, 'error': '로그인 실패'}
+                    return {'success': False, 'protected': False, 'error': f'로그인 실패 ({reason})'}
 
             # 발행
             result = pub.publish_post(
@@ -328,6 +344,7 @@ class PublisherEngine:
                     # 잠금 획득 시도
                     try:
                         if not self.settings_mgr.acquire_lock(grp, self.bot_id):
+                            self.log(f"[{grp}] 다른 봇이 사용 중 (잠금 대기)", 'info')
                             continue
                     except Exception as e:
                         self.log(f"[{grp}] 잠금 획득 오류: {e}", 'warning')
@@ -409,6 +426,7 @@ class PublisherEngine:
                             continue
 
                         if not contents:
+                            self.log(f"[{grp}] 발행대기 콘텐츠 없음", 'info')
                             continue
 
                         content = contents[0]
@@ -496,11 +514,14 @@ class PublisherEngine:
                     # published=True면 이미 발행 후 대기했으므로 추가 대기 없음
 
         finally:
-            # 잠금 해제
-            for grp in groups:
-                try:
-                    self.settings_mgr.release_lock(grp, self.bot_id)
-                except:
-                    pass
-
             self.log("발행 엔진 종료", 'warning')
+
+            # 잠금 해제 (별도 스레드에서 처리 - 메인 종료 차단 방지)
+            def release_locks_async():
+                for grp in groups:
+                    try:
+                        self.settings_mgr.release_lock(grp, self.bot_id)
+                    except:
+                        pass
+
+            threading.Thread(target=release_locks_async, daemon=True).start()

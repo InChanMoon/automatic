@@ -981,27 +981,27 @@ class ContentCreatorProV3:
         scrollbar_x = tk.Scrollbar(tree_container, orient='horizontal')
         scrollbar_x.pack(side='bottom', fill='x')
 
-        # 컬럼: 상태(색상), 그룹, 키워드, 제목, 예약시간, 발행시간, 보기, content_id(숨김)
-        columns = ('상태', '그룹', '키워드', '제목', '예약시간', '발행시간', '보기', 'content_id')
+        # 컬럼: No, 그룹, 키워드, 제목, 예약시간, 생성시간, 보기, content_id(숨김)
+        columns = ('No', '그룹', '키워드', '제목', '예약시간', '생성시간', '보기', 'content_id')
         self.content_tree = ttk.Treeview(tree_container, columns=columns, show='headings',
                                         yscrollcommand=scrollbar_y.set,
                                         xscrollcommand=scrollbar_x.set, height=20)
 
-        self.content_tree.heading('상태', text='')
+        self.content_tree.heading('No', text='No')
         self.content_tree.heading('그룹', text='그룹')
         self.content_tree.heading('키워드', text='키워드')
         self.content_tree.heading('제목', text='제목')
         self.content_tree.heading('예약시간', text='예약시간')
-        self.content_tree.heading('발행시간', text='발행시간')
+        self.content_tree.heading('생성시간', text='생성시간')
         self.content_tree.heading('보기', text='보기')
         self.content_tree.heading('content_id', text='')
 
-        self.content_tree.column('상태', width=25, minwidth=25, anchor='center')
+        self.content_tree.column('No', width=35, minwidth=30, anchor='center')
         self.content_tree.column('그룹', width=50, minwidth=40)
         self.content_tree.column('키워드', width=80, minwidth=60)
         self.content_tree.column('제목', width=200, minwidth=120)
         self.content_tree.column('예약시간', width=110, minwidth=90)
-        self.content_tree.column('발행시간', width=110, minwidth=90)
+        self.content_tree.column('생성시간', width=110, minwidth=90)
         self.content_tree.column('보기', width=40, minwidth=40, anchor='center')
         self.content_tree.column('content_id', width=0, minwidth=0, stretch=False)
 
@@ -1641,35 +1641,35 @@ class ContentCreatorProV3:
 
             filter_status = status_map.get(status_filter)
 
-            for content in contents:
+            # 생성시간 기준 오름차순 정렬 (오래된 것 위, 최신 아래)
+            contents_sorted = sorted(contents, key=lambda x: x.get('created_time', ''))
+
+            row_num = 0
+            for content in contents_sorted:
                 if filter_status and content['status'] != filter_status:
                     continue
 
+                row_num += 1
                 status = content['status']
-
-                # 상태 아이콘 (●)
-                status_icon = '●'
 
                 # 예약시간 표시
                 scheduled = content.get('scheduled_time', '즉시발행')
 
-                # 발행시간 표시 (published 상태에서만)
-                published_time = ''
-                if status == 'published' and content.get('published_time'):
-                    published_time = content['published_time']
-                    if len(published_time) > 16:
-                        published_time = published_time[:16]
+                # 생성시간 표시
+                created_time = content.get('created_time', '')
+                if len(created_time) > 16:
+                    created_time = created_time[:16]
 
                 # 발행글 링크 버튼 (published 상태에서만 '보기' 표시)
                 view_btn = '보기' if status == 'published' and content.get('published_url') else ''
 
-                self.content_tree.insert('', 0, values=(
-                    status_icon,
+                self.content_tree.insert('', 'end', values=(
+                    row_num,
                     content.get('account_group', ''),
                     content['keyword'],
                     content['title'][:35] + '...' if len(content['title']) > 35 else content['title'],
                     scheduled,
-                    published_time,
+                    created_time,
                     view_btn,
                     content['content_id']  # 숨김 컬럼
                 ), tags=(status,))
