@@ -471,3 +471,24 @@ class DriveImageManager:
         except Exception as e:
             self.log(f"Drive 연결 실패: {e}")
             return False
+
+    def get_all_keyword_folders(self) -> List[str]:
+        """
+        루트 폴더 내 모든 키워드 폴더 이름 목록 가져오기
+
+        Returns:
+            키워드 폴더 이름 리스트 (이름순 정렬)
+        """
+        if not self.root_folder_id:
+            self.log("루트 폴더 ID가 설정되지 않음")
+            return []
+
+        try:
+            subfolders = self._list_subfolders(self.root_folder_id)
+            folder_names = [folder['name'] for folder in subfolders]
+            self.log(f"이미지 폴더 {len(folder_names)}개 발견")
+            return folder_names
+
+        except Exception as e:
+            self.log(f"폴더 목록 가져오기 실패: {e}")
+            return []

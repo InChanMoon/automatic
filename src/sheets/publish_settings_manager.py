@@ -22,6 +22,7 @@
 import json
 from datetime import datetime
 from .base import SheetsBase
+from src.utils.content_parser import safe_int
 
 
 class PublishSettingsManager(SheetsBase):
@@ -105,10 +106,10 @@ class PublishSettingsManager(SheetsBase):
 
                 return {
                     'group_name': group_name,
-                    'pending_count': int(row[self.COL_PENDING_COUNT]) if len(row) > self.COL_PENDING_COUNT and row[self.COL_PENDING_COUNT] else 0,
+                    'pending_count': safe_int(row[self.COL_PENDING_COUNT] if len(row) > self.COL_PENDING_COUNT else None, 0),
                     'account': row[self.COL_ACCOUNT] if len(row) > self.COL_ACCOUNT else '',
-                    'posts_per_account': int(row[self.COL_POSTS_PER_ACCOUNT]) if len(row) > self.COL_POSTS_PER_ACCOUNT and row[self.COL_POSTS_PER_ACCOUNT] else 5,
-                    'account_post_count': int(row[self.COL_ACCOUNT_POST_COUNT]) if len(row) > self.COL_ACCOUNT_POST_COUNT and row[self.COL_ACCOUNT_POST_COUNT] else 0,
+                    'posts_per_account': safe_int(row[self.COL_POSTS_PER_ACCOUNT] if len(row) > self.COL_POSTS_PER_ACCOUNT else None, 5),
+                    'account_post_count': safe_int(row[self.COL_ACCOUNT_POST_COUNT] if len(row) > self.COL_ACCOUNT_POST_COUNT else None, 0),
                     'image_index': image_index,
                     'lock_status': row[self.COL_LOCK_STATUS] if len(row) > self.COL_LOCK_STATUS else '',
                     'lock_time': row[self.COL_LOCK_TIME] if len(row) > self.COL_LOCK_TIME else '',
@@ -147,10 +148,10 @@ class PublishSettingsManager(SheetsBase):
 
                 settings[group_name] = {
                     'group_name': group_name,
-                    'pending_count': int(row[self.COL_PENDING_COUNT]) if len(row) > self.COL_PENDING_COUNT and row[self.COL_PENDING_COUNT] else 0,
+                    'pending_count': safe_int(row[self.COL_PENDING_COUNT] if len(row) > self.COL_PENDING_COUNT else None, 0),
                     'account': row[self.COL_ACCOUNT] if len(row) > self.COL_ACCOUNT else '',
-                    'posts_per_account': int(row[self.COL_POSTS_PER_ACCOUNT]) if len(row) > self.COL_POSTS_PER_ACCOUNT and row[self.COL_POSTS_PER_ACCOUNT] else 5,
-                    'account_post_count': int(row[self.COL_ACCOUNT_POST_COUNT]) if len(row) > self.COL_ACCOUNT_POST_COUNT and row[self.COL_ACCOUNT_POST_COUNT] else 0,
+                    'posts_per_account': safe_int(row[self.COL_POSTS_PER_ACCOUNT] if len(row) > self.COL_POSTS_PER_ACCOUNT else None, 5),
+                    'account_post_count': safe_int(row[self.COL_ACCOUNT_POST_COUNT] if len(row) > self.COL_ACCOUNT_POST_COUNT else None, 0),
                     'image_index': image_index,
                     'lock_status': row[self.COL_LOCK_STATUS] if len(row) > self.COL_LOCK_STATUS else '',
                     'lock_time': row[self.COL_LOCK_TIME] if len(row) > self.COL_LOCK_TIME else '',

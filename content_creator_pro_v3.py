@@ -18,6 +18,7 @@ from src.sheets.content_manager_v2 import ContentManagerV2
 from src.content.gemini_generator import GeminiGenerator
 from src.crawler.naver_blog_crawler import NaverBlogCrawler
 from src.utils.naver_html_generator import NaverHTMLGenerator
+from src.drive.image_manager import DriveImageManager
 
 
 class ContentCreatorProV3:
@@ -40,6 +41,14 @@ class ContentCreatorProV3:
         self.html_generator = NaverHTMLGenerator()
         self.generator = None
 
+        # 이미지 매니저 (폴더 목록용)
+        try:
+            self.image_mgr = DriveImageManager()
+            self.image_folders = []  # 캐시
+        except Exception:
+            self.image_mgr = None
+            self.image_folders = []
+
         # 변수
         self.generating = False
         self.stop_requested = False
@@ -51,6 +60,9 @@ class ContentCreatorProV3:
 
         # 라이선스 자동 로드
         self.load_saved_license()
+
+        # 이미지 폴더 목록 로드
+        self.root.after(500, self.refresh_image_folders)
 
     def show_working(self, message):
         """작업 중 상태 표시"""
@@ -405,16 +417,40 @@ class ContentCreatorProV3:
         main_frame = tk.Frame(parent, bg='white', padx=10, pady=10)
         main_frame.pack(fill='both', expand=True)
 
-        # 키워드 (필수)
+        # 키워드
         kw_frame = tk.Frame(main_frame, bg='white')
         kw_frame.pack(fill='x', pady=(0, 8))
 
-        tk.Label(kw_frame, text="키워드 (필수):", bg='white',
+        tk.Label(kw_frame, text="키워드:", bg='white',
                 font=('맑은 고딕', 9, 'bold')).pack(side='left')
         self.rss_keyword_entry = tk.Entry(kw_frame, font=('맑은 고딕', 9), width=25)
         self.rss_keyword_entry.pack(side='left', padx=(5, 10))
-        tk.Label(kw_frame, text="※ RSS 검색어 / 콘텐츠 등록 키워드", bg='white',
+        tk.Label(kw_frame, text="※ RSS 검색용", bg='white',
                 font=('맑은 고딕', 8), fg='#888').pack(side='left')
+
+        # 이미지폴더 선택
+        img_folder_frame = tk.Frame(main_frame, bg='white')
+        img_folder_frame.pack(fill='x', pady=(0, 8))
+
+        tk.Label(img_folder_frame, text="이미지폴더", bg='white',
+                font=('맑은 고딕', 9, 'bold')).pack(side='left')
+        tk.Label(img_folder_frame, text="*", bg='white',
+                font=('맑은 고딕', 9, 'bold'), fg='#f44336').pack(side='left')
+        tk.Label(img_folder_frame, text=":", bg='white',
+                font=('맑은 고딕', 9, 'bold')).pack(side='left')
+        self.url_image_folder_var = tk.StringVar(value='자동생성')
+        self.url_image_folder_combo = ttk.Combobox(img_folder_frame, textvariable=self.url_image_folder_var,
+                                                    state='readonly', width=20, font=('맑은 고딕', 9))
+        self.url_image_folder_combo['values'] = ['자동생성', '(로딩중...)']
+        self.url_image_folder_combo.set('자동생성')
+        self.url_image_folder_combo.pack(side='left', padx=(5, 5))
+
+        tk.Button(img_folder_frame, text="새로고침", command=self.refresh_image_folders,
+                 bg='#607D8B', fg='white', font=('맑은 고딕', 9, 'bold'),
+                 relief='flat', cursor='hand2', padx=8, pady=2).pack(side='left')
+
+        tk.Label(img_folder_frame, text="※ Drive 이미지 폴더", bg='white',
+                font=('맑은 고딕', 8), fg='#888').pack(side='left', padx=(10, 0))
 
         # RSS 검색 섹션
         rss_frame = tk.LabelFrame(main_frame, text=" RSS 검색 (선택) ", bg='white',
@@ -1202,6 +1238,38 @@ class ContentCreatorProV3:
         except:
             pass
 
+    def refresh_image_folders(self):
+        """Drive 이미지 폴더 목록 새로고침"""
+        if not self.image_mgr:
+            # Drive 연결 실패해도 자동생성은 사용 가능
+            self.url_image_folder_combo['values'] = ['자동생성']
+            self.url_image_folder_combo.set('자동생성')
+            return
+
+        def load_folders():
+            try:
+                folders = self.image_mgr.get_all_keyword_folders()
+                self.image_folders = folders
+
+                def update_combo():
+                    # "자동생성"을 맨 앞에 추가
+                    all_options = ['자동생성'] + (folders if folders else [])
+                    self.url_image_folder_combo['values'] = all_options
+                    self.url_image_folder_combo.set('자동생성')  # 기본값
+
+                self.root.after(0, update_combo)
+
+            except Exception as e:
+                def show_error():
+                    # 로딩 실패해도 자동생성은 사용 가능
+                    self.url_image_folder_combo['values'] = ['자동생성']
+                    self.url_image_folder_combo.set('자동생성')
+                    print(f"이미지 폴더 로딩 실패: {e}")
+
+                self.root.after(0, show_error)
+
+        threading.Thread(target=load_folders, daemon=True).start()
+
     def search_rss_links(self):
         """RSS에서 키워드로 다중 링크 검색"""
         url = self.url_entry.get().strip()
@@ -1260,10 +1328,13 @@ class ContentCreatorProV3:
             self.show_error("먼저 라이선스를 확인하세요")
             return
 
-        # 키워드 필수 체크
+        # 키워드 (선택)
         keyword = self.rss_keyword_entry.get().strip()
-        if not keyword:
-            self.show_error("키워드를 입력하세요")
+
+        # 이미지폴더 체크 (필수)
+        image_folder = self.url_image_folder_var.get()
+        if not image_folder or image_folder in ['(로딩중...)', '(폴더 없음)', '(Drive 연결 실패)', '(로딩 실패)']:
+            self.show_error("이미지폴더를 선택하세요")
             return
 
         # 링크 목록 파싱
@@ -1373,7 +1444,7 @@ class ContentCreatorProV3:
                         )
 
                         self.content_mgr.add_content(
-                            keyword=keyword,
+                            keyword=image_folder,  # 이미지폴더를 keyword로 저장 (발행봇 호환)
                             title=gen_result['title'],
                             content=gen_result['content'],
                             license_key=self.current_license['license_key'],

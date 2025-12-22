@@ -6,6 +6,8 @@ Anthropic Claude API 지원
 
 import json
 import anthropic
+from src.utils.content_parser import parse_title_and_content
+from src.utils.retry import retry_with_backoff
 
 
 class ClaudeGenerator:
@@ -65,25 +67,25 @@ class ClaudeGenerator:
 """
 
         try:
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                messages=[
-                    {"role": "user", "content": full_prompt}
-                ]
-            )
+            # API 호출 (재시도 로직 적용)
+            @retry_with_backoff(max_attempts=3, initial_delay=2.0, backoff_factor=2.0)
+            def _call_api():
+                return self.client.messages.create(
+                    model=self.model,
+                    max_tokens=4096,
+                    messages=[
+                        {"role": "user", "content": full_prompt}
+                    ]
+                )
 
+            message = _call_api()
             text = message.content[0].text
 
-            title, content = self._parse_response(text)
-
-            return {
-                'title': title,
-                'content': content
-            }
+            # 공통 파싱 유틸리티 사용
+            return parse_title_and_content(text)
 
         except Exception as e:
-            print(f"❌ Claude API 오류: {e}")
+            print(f"[X] Claude API 오류: {e}")
             return {
                 'title': '콘텐츠 생성 오류',
                 'content': f'오류가 발생했습니다: {str(e)}'
@@ -125,25 +127,25 @@ class ClaudeGenerator:
 """
 
         try:
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
+            # API 호출 (재시도 로직 적용)
+            @retry_with_backoff(max_attempts=3, initial_delay=2.0, backoff_factor=2.0)
+            def _call_api():
+                return self.client.messages.create(
+                    model=self.model,
+                    max_tokens=4096,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
 
+            message = _call_api()
             text = message.content[0].text
 
-            title, content = self._parse_response(text)
-
-            return {
-                'title': title,
-                'content': content
-            }
+            # 공통 파싱 유틸리티 사용
+            return parse_title_and_content(text)
 
         except Exception as e:
-            print(f"❌ Claude API 오류: {e}")
+            print(f"[X] Claude API 오류: {e}")
             return {
                 'title': '리라이팅 오류',
                 'content': f'오류가 발생했습니다: {str(e)}'
@@ -180,52 +182,32 @@ class ClaudeGenerator:
 """
 
         try:
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
+            # API 호출 (재시도 로직 적용)
+            @retry_with_backoff(max_attempts=3, initial_delay=2.0, backoff_factor=2.0)
+            def _call_api():
+                return self.client.messages.create(
+                    model=self.model,
+                    max_tokens=4096,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
 
+            message = _call_api()
             text = message.content[0].text
 
-            title, content = self._parse_response(text)
+            # 공통 파싱 유틸리티 사용
+            result = parse_title_and_content(text)
 
-            return {
-                'title': title,
-                'content': content
-            }
+            # 제목이 없으면 기본값
+            if not result['title']:
+                result['title'] = f'{keyword} 관련 정보'
+
+            return result
 
         except Exception as e:
-            print(f"❌ Claude API 오류: {e}")
+            print(f"[X] Claude API 오류: {e}")
             return {
                 'title': f'{keyword} 관련 정보',
                 'content': f'오류가 발생했습니다: {str(e)}'
             }
-
-    def _parse_response(self, text):
-        """응답 파싱"""
-        lines = text.strip().split('\n')
-
-        title = ''
-        content_lines = []
-        in_content = False
-
-        for line in lines:
-            if line.startswith('제목:'):
-                title = line.replace('제목:', '').strip()
-            elif line.startswith('본문:'):
-                in_content = True
-            elif in_content:
-                content_lines.append(line)
-
-        content = '\n'.join(content_lines).strip()
-
-        if not title:
-            title = lines[0].strip() if lines else '제목 없음'
-
-        if not content:
-            content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else text
-
-        return title, content

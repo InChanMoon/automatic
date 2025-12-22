@@ -5,6 +5,7 @@
 - 모든 사용자 콘텐츠 조회 (account_group 필터링)
 - 발행 상태 관리 (ready -> publishing -> published)
 - 아카이브 이동 기능
+- 시트 목록 캐싱으로 API 호출 최소화
 """
 
 from datetime import datetime
@@ -33,19 +34,44 @@ class ContentManagerV3(SheetsBase):
     STATUS_PUBLISHED = 'published'   # 발행 완료
     STATUS_FAILED = 'failed'         # 발행 실패
 
+    # 캐시 유효 시간 (초)
+    CACHE_TTL = 60
+
     def __init__(self):
         """초기화"""
         super().__init__()
+        # 시트 목록 캐시
+        self._sheet_cache = None
+        self._sheet_cache_time = None
+
+    def _is_cache_valid(self):
+        """캐시 유효성 확인"""
+        if not self._sheet_cache_time:
+            return False
+        elapsed = (datetime.now() - self._sheet_cache_time).total_seconds()
+        return elapsed < self.CACHE_TTL
+
+    def invalidate_cache(self):
+        """캐시 무효화 (새 시트 생성 후 등)"""
+        self._sheet_cache = None
+        self._sheet_cache_time = None
 
     def get_all_content_sheets(self):
         """
-        모든 콘텐츠 시트 목록 가져오기
+        모든 콘텐츠 시트 목록 가져오기 (캐싱 적용)
 
         Returns:
             list: 콘텐츠 시트 이름 리스트
         """
+        # 캐시 유효하면 캐시 반환
+        if self._is_cache_valid() and self._sheet_cache is not None:
+            return self._sheet_cache
+
+        # 캐시 갱신
         all_sheets = self.get_all_sheet_names()
-        return [name for name in all_sheets if name.startswith('콘텐츠_')]
+        self._sheet_cache = [name for name in all_sheets if name.startswith('콘텐츠_')]
+        self._sheet_cache_time = datetime.now()
+        return self._sheet_cache
 
     def get_ready_contents_by_group(self, account_group):
         """

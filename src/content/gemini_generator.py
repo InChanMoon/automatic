@@ -7,6 +7,8 @@ Gemini API 콘텐츠 생성기
 import json
 from google import genai
 from google.genai import types
+from src.utils.content_parser import parse_title_and_content
+from src.utils.retry import retry_with_backoff
 
 
 class GeminiGenerator:
@@ -74,45 +76,29 @@ class GeminiGenerator:
 """
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=self.config
-            )
+            # API 호출 (재시도 로직 적용)
+            @retry_with_backoff(max_attempts=3, initial_delay=2.0, backoff_factor=2.0)
+            def _call_api():
+                return self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=self.config
+                )
+
+            response = _call_api()
             text = response.text
 
-            # 제목과 본문 분리
-            lines = text.strip().split('\n')
-
-            title = ''
-            content_lines = []
-            in_content = False
-
-            for line in lines:
-                if line.startswith('제목:'):
-                    title = line.replace('제목:', '').strip()
-                elif line.startswith('본문:'):
-                    in_content = True
-                elif in_content:
-                    content_lines.append(line)
-
-            content = '\n'.join(content_lines).strip()
+            # 공통 파싱 유틸리티 사용
+            result = parse_title_and_content(text)
 
             # 제목이 추출되지 않은 경우 대체
-            if not title:
-                title = f"{keyword}에 대한 완벽 가이드"
+            if not result['title']:
+                result['title'] = f"{keyword}에 대한 완벽 가이드"
 
-            # 본문이 추출되지 않은 경우
-            if not content:
-                content = text
-
-            return {
-                'title': title,
-                'content': content
-            }
+            return result
 
         except Exception as e:
-            print(f"❌ Gemini API 오류: {e}")
+            print(f"[X] Gemini API 오류: {e}")
             return {
                 'title': f"{keyword} 관련 정보",
                 'content': f"죄송합니다. 콘텐츠 생성 중 오류가 발생했습니다.\n\n키워드: {keyword}"
@@ -152,57 +138,26 @@ class GeminiGenerator:
 """
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=self.config
-            )
+            # API 호출 (재시도 로직 적용)
+            @retry_with_backoff(max_attempts=3, initial_delay=2.0, backoff_factor=2.0)
+            def _call_api():
+                return self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=self.config
+                )
+
+            response = _call_api()
             text = response.text
 
-            # 제목과 본문 분리
-            lines = text.strip().split('\n')
+            # 공통 파싱 유틸리티 사용
+            result = parse_title_and_content(text)
 
-            title = ''
-            content_lines = []
-            in_content = False
-            title_line_idx = -1
+            # 제목이 없으면 기본값
+            if not result['title']:
+                result['title'] = "생성된 글"
 
-            for idx, line in enumerate(lines):
-                if line.startswith('제목:'):
-                    title = line.replace('제목:', '').strip()
-                    title_line_idx = idx
-                elif line.startswith('본문:'):
-                    in_content = True
-                elif in_content:
-                    content_lines.append(line)
-
-            content = '\n'.join(content_lines).strip()
-
-            # 제목이 추출되지 않은 경우
-            if not title:
-                # 첫 줄을 제목으로 사용
-                title = lines[0] if lines else "생성된 글"
-
-            # 본문이 추출되지 않은 경우
-            if not content:
-                # "제목:" 줄과 "본문:" 줄을 제외한 나머지를 본문으로
-                filtered_lines = []
-                for idx, line in enumerate(lines):
-                    if idx == title_line_idx:
-                        continue
-                    if line.strip().startswith('제목:') or line.strip() == '본문:':
-                        continue
-                    filtered_lines.append(line)
-                content = '\n'.join(filtered_lines).strip()
-
-            # 그래도 없으면 전체 텍스트
-            if not content:
-                content = text
-
-            return {
-                'title': title,
-                'content': content
-            }
+            return result
 
         except Exception as e:
             print(f"[X] Gemini API 오류: {e}")
@@ -230,11 +185,16 @@ class GeminiGenerator:
 """
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=self.config
-            )
+            # API 호출 (재시도 로직 적용)
+            @retry_with_backoff(max_attempts=3, initial_delay=2.0, backoff_factor=2.0)
+            def _call_api():
+                return self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=self.config
+                )
+
+            response = _call_api()
             return response.text.strip()
 
         except Exception as e:

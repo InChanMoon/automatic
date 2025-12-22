@@ -65,10 +65,17 @@ class PublisherEngine:
 
     def log(self, message: str, level: str = 'info'):
         """로그 출력"""
+        # 사용자 친화적 메시지 변환
+        friendly_messages = {
+            '데이터 로드 중...': '설정 불러오는 중...',
+            '대기중... (12초)': '다음 발행 대기 중...',
+        }
+        display_msg = friendly_messages.get(message, message)
+
         if self.log_callback:
-            self.log_callback(message, level)
+            self.log_callback(display_msg, level)
         else:
-            print(f"[{level.upper()}] {message}")
+            print(f"[{level.upper()}] {display_msg}")
 
     def stop(self):
         """중지 요청 - 즉시 브라우저 종료"""
@@ -194,21 +201,25 @@ class PublisherEngine:
         if self.stop_requested:
             return {'success': False, 'protected': False, 'error': '중지됨', 'stopped': True}
 
-        self.log(f"[{grp}] 발행: {content['title'][:20]}...")
+        # 로그 메시지는 run()에서 진행률 포함하여 출력하므로 여기서는 생략
 
         pub = None
         try:
             self.content_mgr.mark_as_publishing(content['sheet_name'], content['row_num'])
 
-            # 이미지 준비 (그룹 설정 후 인덱스 저장됨)
+            # keyword 확인 - "자동생성"이면 이미지 자동 생성
+            kw = content.get('keyword', '')
+            auto_generate = (kw == '자동생성')
+
+            # 이미지 준비
             images = []
-            cnt = self._count_markers(content['content'])
-            if cnt > 0 and self.image_mgr:
-                kw = content.get('keyword', '')
-                if kw:
-                    # 그룹 설정 (인덱스 저장용)
-                    self.image_mgr.set_group(grp)
-                    images = self.image_mgr.get_images_for_post(kw, cnt)
+            if not auto_generate:
+                # Drive에서 이미지 가져오기
+                cnt = self._count_markers(content['content'])
+                if cnt > 0 and self.image_mgr:
+                    if kw:
+                        self.image_mgr.set_group(grp)
+                        images = self.image_mgr.get_images_for_post(kw, cnt)
 
             # 브라우저 시작
             pub = NaverBlogPublisher(headless=self.headless)
@@ -261,7 +272,8 @@ class PublisherEngine:
                 title=content['title'],
                 content=content['content'],
                 images=images,
-                scheduled_time=content.get('scheduled_time')
+                scheduled_time=content.get('scheduled_time'),
+                auto_generate_images=auto_generate
             )
 
             if result['success']:
@@ -430,8 +442,10 @@ class PublisherEngine:
                             continue
 
                         content = contents[0]
+                        total_contents = len(contents)
 
-                        # 발행 실행
+                        # 발행 실행 (진행률 표시 개선)
+                        self.log(f"[{grp}] 발행 시작 [1/{total_contents}]: {content['title'][:25]}...", 'info')
                         result = self.publish_single(grp, acc, content)
 
                         if result['success']:

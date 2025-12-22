@@ -17,6 +17,7 @@ from src.sheets.account_manager import AccountManager
 from src.sheets.publish_settings_manager import PublishSettingsManager
 from src.publisher.naver_blog_publisher import NaverBlogPublisher
 from src.drive.image_manager import DriveImageManager
+from src.ui.theme import Theme
 from publisher_engine import PublisherEngine
 
 
@@ -27,7 +28,7 @@ class PublisherBot:
         self.root = root
         self.root.title("네이버 블로그 발행봇")
         self.root.geometry("750x450")
-        self.root.configure(bg='#f0f0f0')
+        self.root.configure(bg=Theme.BG_MAIN)
 
         # 봇 ID (동시성 제어용)
         self.bot_id = f"bot_{uuid.uuid4().hex[:8]}"
@@ -41,8 +42,10 @@ class PublisherBot:
         try:
             self.image_mgr = DriveImageManager(settings_mgr=self.settings_mgr)
             if not self.image_mgr.test_connection():
+                print("[!] 이미지 매니저 연결 실패")
                 self.image_mgr = None
-        except:
+        except Exception as e:
+            print(f"[!] 이미지 매니저 초기화 오류: {e}")
             self.image_mgr = None
 
         # 상태
@@ -57,30 +60,30 @@ class PublisherBot:
     def setup_ui(self):
         """UI 구성"""
         # 상단 컨트롤
-        top = tk.Frame(self.root, bg='#f0f0f0')
+        top = tk.Frame(self.root, bg=Theme.BG_MAIN)
         top.pack(fill='x', padx=6, pady=4)
 
         # 버튼들 (작은 크기)
         self.start_btn = tk.Button(top, text="▶시작", command=self.start_publishing,
-                                   bg='#4CAF50', fg='white', font=('맑은 고딕', 8, 'bold'),
+                                   bg=Theme.COLOR_SUCCESS, fg='white', font=Theme.FONT_SMALL_BOLD,
                                    relief='flat', padx=8, pady=2)
         self.start_btn.pack(side='left', padx=1)
 
         self.stop_btn = tk.Button(top, text="■중지", command=self.stop_publishing,
-                                  bg='#f44336', fg='white', font=('맑은 고딕', 8, 'bold'),
+                                  bg=Theme.COLOR_ERROR, fg='white', font=Theme.FONT_SMALL_BOLD,
                                   relief='flat', padx=8, pady=2, state='disabled')
         self.stop_btn.pack(side='left', padx=1)
 
         tk.Button(top, text="새로고침", command=self.refresh_all_data,
-                 bg='#2196F3', fg='white', font=('맑은 고딕', 8),
+                 bg=Theme.COLOR_INFO, fg='white', font=Theme.FONT_SMALL,
                  relief='flat', padx=6, pady=2).pack(side='left', padx=1)
 
         tk.Button(top, text="잠금해제", command=self.force_release_locks,
-                 bg='#FF9800', fg='white', font=('맑은 고딕', 8),
+                 bg=Theme.COLOR_WARNING, fg='white', font=Theme.FONT_SMALL,
                  relief='flat', padx=6, pady=2).pack(side='left', padx=1)
 
         tk.Button(top, text="캡차계정", command=self.open_captcha_accounts,
-                 bg='#9C27B0', fg='white', font=('맑은 고딕', 8),
+                 bg=Theme.COLOR_PURPLE, fg='white', font=Theme.FONT_SMALL,
                  relief='flat', padx=6, pady=2).pack(side='left', padx=1)
 
         # 헤드리스 옵션
@@ -88,39 +91,39 @@ class PublisherBot:
         ttk.Checkbutton(top, text="헤드리스", variable=self.headless_var).pack(side='left', padx=6)
 
         # 상태 표시
-        self.status_label = tk.Label(top, text="대기중", bg='#f0f0f0', fg='#666',
-                                    font=('맑은 고딕', 8, 'bold'))
+        self.status_label = tk.Label(top, text="대기중", bg=Theme.BG_MAIN, fg=Theme.FG_TEXT_LIGHT,
+                                    font=Theme.FONT_SMALL_BOLD)
         self.status_label.pack(side='right', padx=3)
 
-        tk.Label(top, text=f"ID:{self.bot_id[-6:]}", bg='#f0f0f0', fg='#999',
-                font=('맑은 고딕', 7)).pack(side='right', padx=3)
+        tk.Label(top, text=f"ID:{self.bot_id[-6:]}", bg=Theme.BG_MAIN, fg=Theme.FG_TEXT_MUTED,
+                font=Theme.FONT_TINY).pack(side='right', padx=3)
 
         # 메인 영역 (좌: 그룹, 우: 로그)
-        main = tk.PanedWindow(self.root, orient='horizontal', bg='#f0f0f0', sashwidth=3)
+        main = tk.PanedWindow(self.root, orient='horizontal', bg=Theme.BG_MAIN, sashwidth=3)
         main.pack(fill='both', expand=True, padx=6, pady=3)
 
         # 좌측: 그룹 목록
-        left = tk.Frame(main, bg='white')
+        left = tk.Frame(main, bg=Theme.BG_WHITE)
         main.add(left, width=200)
 
         # 그룹 헤더
-        header = tk.Frame(left, bg='white')
+        header = tk.Frame(left, bg=Theme.BG_WHITE)
         header.pack(fill='x', padx=3, pady=2)
 
         self.select_all_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(header, text="전체", variable=self.select_all_var,
                        command=self.toggle_select_all).pack(side='left')
-        self.count_label = tk.Label(header, text="(0)", bg='white', fg='#666', font=('맑은 고딕', 7))
+        self.count_label = tk.Label(header, text="(0)", bg=Theme.BG_WHITE, fg=Theme.FG_TEXT_LIGHT, font=Theme.FONT_TINY)
         self.count_label.pack(side='left', padx=3)
 
         # 그룹 트리뷰 (컴팩트)
-        tree_frame = tk.Frame(left, bg='white')
+        tree_frame = tk.Frame(left, bg=Theme.BG_WHITE)
         tree_frame.pack(fill='both', expand=True, padx=2, pady=2)
 
         # 스타일 설정 (행 색상)
         style = ttk.Style()
-        style.configure('Compact.Treeview', rowheight=20, font=('맑은 고딕', 8))
-        style.configure('Compact.Treeview.Heading', font=('맑은 고딕', 8, 'bold'))
+        style.configure('Compact.Treeview', rowheight=20, font=Theme.FONT_SMALL)
+        style.configure('Compact.Treeview.Heading', font=Theme.FONT_SMALL_BOLD)
 
         cols = ('sel', 'group', 'wait', 'today', 'per_acc')
         self.tree = ttk.Treeview(tree_frame, columns=cols, show='headings',
@@ -139,8 +142,8 @@ class PublisherBot:
         self.tree.column('per_acc', width=50, anchor='center', stretch=False)
 
         # 행 색상 태그 설정
-        self.tree.tag_configure('available', background='#e8f5e9')
-        self.tree.tag_configure('locked', background='#ffebee')
+        self.tree.tag_configure('available', background=Theme.TREE_ROW_AVAILABLE)
+        self.tree.tag_configure('locked', background=Theme.TREE_ROW_LOCKED)
 
         vsb = ttk.Scrollbar(tree_frame, orient='vertical', command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
@@ -151,41 +154,41 @@ class PublisherBot:
         self.tree.bind('<Double-1>', self.on_tree_double_click)
 
         # 우측: 로그
-        right = tk.Frame(main, bg='white')
+        right = tk.Frame(main, bg=Theme.BG_WHITE)
         main.add(right)
 
         # 로그 헤더 (삭제 버튼)
-        log_header = tk.Frame(right, bg='white')
+        log_header = tk.Frame(right, bg=Theme.BG_WHITE)
         log_header.pack(fill='x', padx=2, pady=1)
         tk.Button(log_header, text="로그삭제", command=self.clear_log,
-                 bg='#666', fg='white', font=('맑은 고딕', 7),
+                 bg=Theme.COLOR_GRAY, fg='white', font=Theme.FONT_TINY,
                  relief='flat', padx=4, pady=0).pack(side='right')
 
-        self.log_text = scrolledtext.ScrolledText(right, font=('Consolas', 8),
-                                                  wrap='word', bg='#1a1a1a', fg='#ccc')
+        self.log_text = scrolledtext.ScrolledText(right, font=Theme.FONT_LOG,
+                                                  wrap='word', bg=Theme.BG_DARK, fg=Theme.FG_TEXT_DARK)
         self.log_text.pack(fill='both', expand=True, padx=2, pady=2)
 
         # 하단 상태바
-        bottom = tk.Frame(self.root, bg='#333', height=18)
+        bottom = tk.Frame(self.root, bg=Theme.BG_DARK_FOOTER, height=18)
         bottom.pack(fill='x')
         bottom.pack_propagate(False)
 
-        self.stats_label = tk.Label(bottom, text="성공:0 실패:0", bg='#333', fg='#aaa',
-                                   font=('맑은 고딕', 7))
+        self.stats_label = tk.Label(bottom, text="성공:0 실패:0", bg=Theme.BG_DARK_FOOTER, fg=Theme.FG_TEXT_DARK_MUTED,
+                                   font=Theme.FONT_TINY)
         self.stats_label.pack(side='right', padx=8)
 
     def log(self, msg, level='info'):
         """로그 출력"""
         ts = datetime.now().strftime("%H:%M:%S")
-        colors = {'info': '#ccc', 'success': '#4CAF50', 'error': '#f44336', 'warning': '#FF9800'}
+        colors = Theme.get_log_colors()
         print(f"[{ts}] {msg}")
         try:
             if self.root.winfo_exists():
                 self.log_text.insert('end', f"[{ts}] {msg}\n", level)
-                self.log_text.tag_config(level, foreground=colors.get(level, '#ccc'))
+                self.log_text.tag_config(level, foreground=colors.get(level, Theme.FG_TEXT_DARK))
                 self.log_text.see('end')
-        except:
-            pass
+        except Exception:
+            pass  # UI 업데이트 실패는 무시
 
     def clear_log(self):
         """로그 삭제"""
@@ -419,7 +422,7 @@ class PublisherBot:
         self.stop_requested = False
         self.start_btn.config(state='disabled')
         self.stop_btn.config(state='normal')
-        self.status_label.config(text="발행중", fg='#4CAF50')
+        self.status_label.config(text="발행중", fg=Theme.COLOR_SUCCESS)
 
         # PublisherEngine 사용
         self.engine = PublisherEngine(
@@ -454,7 +457,7 @@ class PublisherBot:
         self.publishing = False
         self.start_btn.config(state='normal')
         self.stop_btn.config(state='disabled')
-        self.status_label.config(text="대기중", fg='#666')
+        self.status_label.config(text="대기중", fg=Theme.FG_TEXT_LIGHT)
         self.log("중지됨", 'warning')
 
     def open_captcha_accounts(self):

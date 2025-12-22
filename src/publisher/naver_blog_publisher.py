@@ -24,6 +24,16 @@ import google.generativeai as genai
 from PIL import Image
 import base64
 
+# 텍스트 이미지 자동 생성
+try:
+    from src.utils.text_image_generator import (
+        generate_auto_images_for_publish,
+        cleanup_temp_images
+    )
+    HAS_TEXT_IMAGE_GENERATOR = True
+except ImportError:
+    HAS_TEXT_IMAGE_GENERATOR = False
+
 # Windows 클립보드 이미지 지원
 if sys.platform == 'win32':
     try:
@@ -102,6 +112,7 @@ class NaverBlogPublisher:
         self.current_blog_id = None
         self.log_callback: Optional[Callable[[str], None]] = None
         self.stop_requested = False  # 중지 요청 플래그
+        self.auto_generated_images: List[str] = []  # 자동 생성된 임시 이미지
 
         # 캡차 풀이용 Gemini 초기화
         self.gemini_model = None
@@ -398,10 +409,16 @@ class NaverBlogPublisher:
 
             if captcha_input:
                 # JavaScript로 직접 값 설정 (봇 탐지 우회)
+                # 답변의 특수문자 이스케이프 처리
+                answer_escaped = (answer
+                    .replace('\\', '\\\\')
+                    .replace('"', '\\"')
+                    .replace("'", "\\'")
+                    .replace('\n', '\\n'))
                 self.page.evaluate(f'''
                     const captchaInput = document.querySelector("input[placeholder*='정답']");
                     if (captchaInput) {{
-                        captchaInput.value = "{answer}";
+                        captchaInput.value = "{answer_escaped}";
                         captchaInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
                         captchaInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
                     }}
@@ -718,7 +735,8 @@ class NaverBlogPublisher:
         content: str,
         images: List[str] = None,
         scheduled_time: str = None,
-        progress_callback: Callable[[str, int], None] = None
+        progress_callback: Callable[[str, int], None] = None,
+        auto_generate_images: bool = False
     ) -> Dict:
         """블로그 글 발행 (즉시 또는 예약)
 
@@ -729,6 +747,11 @@ class NaverBlogPublisher:
             scheduled_time: 예약발행 시간 (None/'즉시발행' = 즉시, 'YYYY-MM-DD HH:MM' = 예약)
                            예약 시간이 현재 시간보다 이전이면 즉시 발행
             progress_callback: 진행 상황 콜백 (메시지, 퍼센트)
+            auto_generate_images: 이미지 자동 생성 여부 (기본값: False)
+                                 True이면 마커 기반 이미지 자동 생성:
+                                 - 1번 이미지: 항상 제목 이미지
+                                 - 2번~ 이미지: 단락 첫 문장 이미지
+                                 - 단락 부족 시 초과 마커 자동 제거
 
         Returns:
             발행 결과 딕셔너리 {success: bool, url: str, error: str, is_scheduled: bool}
@@ -740,6 +763,16 @@ class NaverBlogPublisher:
             self.log(msg)
             if progress_callback:
                 progress_callback(msg, pct)
+
+        # 자동 이미지 생성
+        if auto_generate_images and HAS_TEXT_IMAGE_GENERATOR and not images:
+            update_progress("이미지 자동 생성 중...", 3)
+            try:
+                content, self.auto_generated_images = generate_auto_images_for_publish(title, content)
+                images = self.auto_generated_images
+                self.log(f"자동 생성 이미지: {len(images)}개")
+            except Exception as e:
+                self.log(f"이미지 자동 생성 실패 (무시): {e}")
 
         try:
             # 이미 글쓰기 페이지에 있는지 확인 (쿠키 로그인 후)
@@ -767,9 +800,9 @@ class NaverBlogPublisher:
                     frame = self.page
                     self.log("직접 페이지 모드로 에디터 접근")
 
-                # 에디터 로드 확인 - 제목 영역이 보이는지 확인
-                frame.locator(SELECTORS["title_area"]).wait_for(state="visible", timeout=15000)
-                update_progress("에디터 로드 완료", 15)
+                # 에디터 로드 확인 - 제목 영역이 보이는지 확인 (30초로 증가 - 느린 네트워크 대응)
+                frame.locator(SELECTORS["title_area"]).wait_for(state="visible", timeout=30000)
+                update_progress("에디터 준비 완료", 15)
             except Exception as e:
                 return {'success': False, 'error': f'에디터 로드 실패: {e}', 'url': '', 'is_scheduled': False}
 
@@ -1045,6 +1078,15 @@ class NaverBlogPublisher:
         except Exception as e:
             self.log(f"발행 오류: {e}")
             return {'success': False, 'error': str(e), 'url': '', 'is_scheduled': False}
+
+        finally:
+            # 자동 생성된 임시 이미지 정리
+            if self.auto_generated_images and HAS_TEXT_IMAGE_GENERATOR:
+                try:
+                    cleanup_temp_images(self.auto_generated_images)
+                    self.auto_generated_images = []
+                except:
+                    pass
 
     def _close_popups(self, frame):
         """팝업 닫기"""
@@ -1425,13 +1467,13 @@ class NaverBlogPublisher:
                 lines = text_before.split('\n')
                 for i, line in enumerate(lines):
                     if line.strip():
-                        # 헤드리스 모드에서는 직접 타이핑
-                        self.page.keyboard.type(line, delay=10)
-                        self._random_delay(0.05, 0.1)
+                        # 헤드리스 모드에서는 insert_text 사용 (type보다 훨씬 빠름)
+                        self.page.keyboard.insert_text(line)
+                        self._random_delay(0.02, 0.05)
 
                     if i < len(lines) - 1:
                         self.page.keyboard.press("Enter")
-                        self._random_delay(0.03, 0.08)
+                        self._random_delay(0.02, 0.05)
 
             # 마커 위치에 이미지 삽입 (file input 방식)
             for idx, img_num in enumerate(range(marker['start'], marker['end'] + 1)):
@@ -1463,12 +1505,12 @@ class NaverBlogPublisher:
             lines = remaining_text.split('\n')
             for i, line in enumerate(lines):
                 if line.strip():
-                    self.page.keyboard.type(line, delay=10)
-                    self._random_delay(0.05, 0.1)
+                    self.page.keyboard.insert_text(line)
+                    self._random_delay(0.02, 0.05)
 
                 if i < len(lines) - 1:
                     self.page.keyboard.press("Enter")
-                    self._random_delay(0.03, 0.08)
+                    self._random_delay(0.02, 0.05)
 
         self.log(f"총 {inserted_images}개 이미지 삽입 완료 (헤드리스)")
 
@@ -1637,7 +1679,8 @@ class NaverBlogPublisher:
                 title=post.get('title', ''),
                 content=post.get('content', ''),
                 images=post.get('images', []),
-                scheduled_time=post.get('scheduled_time')
+                scheduled_time=post.get('scheduled_time'),
+                auto_generate_images=post.get('auto_generate_images', False)
             )
 
             result['title'] = post.get('title', '')
