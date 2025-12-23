@@ -34,6 +34,18 @@ try:
 except ImportError:
     HAS_TEXT_IMAGE_GENERATOR = False
 
+# HTML 컴포넌트 (구분선, 인용구, 표)
+try:
+    from src.publisher.html_components import (
+        ComponentMarkerProcessor,
+        get_horizontal_line_html,
+        get_quotation_html,
+        get_table_html
+    )
+    HAS_HTML_COMPONENTS = True
+except ImportError:
+    HAS_HTML_COMPONENTS = False
+
 # Windows 클립보드 이미지 지원
 if sys.platform == 'win32':
     try:
@@ -846,11 +858,14 @@ class NaverBlogPublisher:
                         # 클립보드 미지원 -> 마커 제거 후 텍스트만 입력
                         self.log("클립보드 미지원: 이미지 삽입 불가, 텍스트만 입력")
                         processed_content = self._remove_image_markers(content)
+                        processed_content = self._remove_component_markers(processed_content)
                         self._input_long_text(processed_content)
+                        # 컴포넌트 마커 처리
+                        if HAS_HTML_COMPONENTS:
+                            self._process_component_markers(content)
                 else:
-                    # 이미지 없음 -> 마커 제거 후 텍스트만 입력
-                    processed_content = self._remove_image_markers(content)
-                    self._input_long_text(processed_content)
+                    # 이미지 없음 -> 컴포넌트 마커 위치에 맞게 처리
+                    self._input_content_with_components(content)
 
                 update_progress("본문 입력 완료", 70)
             except Exception as e:
@@ -1258,7 +1273,7 @@ class NaverBlogPublisher:
             if line.strip():
                 if self.headless:
                     # 헤드리스 모드: 클립보드 대신 직접 타이핑
-                    self.page.keyboard.type(line, delay=5)
+                    self.page.keyboard.insert_text(line)
                 else:
                     # 일반 모드: 클립보드 사용
                     pyperclip.copy(line)
@@ -1269,6 +1284,87 @@ class NaverBlogPublisher:
             if i < len(lines) - 1:
                 self.page.keyboard.press("Enter")
                 self._random_delay(0.05, 0.15)
+
+    def _input_text_block(self, text: str):
+        """텍스트 블록 입력 (컴포넌트 마커 처리용)"""
+        lines = text.split('\n')
+        for i, line in enumerate(lines):
+            if line.strip():
+                if self.headless:
+                    self.page.keyboard.insert_text(line)
+                else:
+                    pyperclip.copy(line)
+                    self._random_delay(0.05, 0.1)
+                    self.page.keyboard.press("Control+v")
+                self._random_delay(0.02, 0.05)
+
+            if i < len(lines) - 1:
+                self.page.keyboard.press("Enter")
+                self._random_delay(0.02, 0.05)
+
+    def _input_content_with_components(self, content: str):
+        """
+        본문 입력 + 컴포넌트 마커 처리 (이미지 없을 때)
+
+        마커 위치에 맞게 텍스트와 컴포넌트를 순차적으로 입력/삽입
+        버튼 클릭 방식으로 컴포넌트 삽입 (JavaScript injection은 발행 시 무시됨)
+        """
+        if not HAS_HTML_COMPONENTS:
+            # 컴포넌트 모듈 없으면 마커 제거 후 텍스트만 입력
+            processed = self._remove_image_markers(content)
+            self._input_long_text(processed)
+            return
+
+        # 이미지 마커 먼저 제거
+        content_no_img = self._remove_image_markers(content)
+
+        # 컴포넌트 마커 찾기 (이미지 마커 제거된 텍스트에서)
+        markers = ComponentMarkerProcessor.find_all_markers(content_no_img)
+
+        if not markers:
+            # 마커 없으면 그냥 입력
+            self._input_long_text(content_no_img)
+            return
+
+        self.log(f"컴포넌트 마커 {len(markers)}개 발견, 버튼 클릭 방식으로 처리")
+
+        # iframe 프레임 가져오기
+        frame = self.page.frame_locator("#mainFrame")
+
+        # 마커 위치 기준으로 분할하여 처리
+        last_pos = 0
+        for marker in markers:
+            # 마커 앞의 텍스트 입력
+            text_before = content_no_img[last_pos:marker['start']]
+            if text_before.strip():
+                self._input_text_block(text_before)
+                self.page.keyboard.press("Enter")
+                self._random_delay(0.1, 0.2)
+
+            # 컴포넌트 삽입 (버튼 클릭 방식)
+            marker_type = marker['type']
+            if marker_type == 'hr':
+                self._insert_horizontal_line_via_button(frame)
+                self._random_delay(0.2, 0.4)
+            elif marker_type == 'quote':
+                quote_text = marker.get('data', '')
+                self._insert_quotation_via_button(quote_text, frame)
+                self._random_delay(0.2, 0.4)
+            elif marker_type in ('table', 'markdown_table'):
+                # 표는 아직 버튼 방식 미구현, 마커 텍스트로 대체
+                self.log(f"[!] 표 마커는 아직 미지원, 텍스트로 대체")
+                table_text = f"[표: {marker.get('data', '')}]"
+                self._input_text_block(table_text)
+                self._random_delay(0.1, 0.2)
+
+            last_pos = marker['end']
+
+        # 마지막 마커 뒤의 텍스트 입력
+        remaining = content_no_img[last_pos:]
+        if remaining.strip():
+            self.page.keyboard.press("Enter")
+            self._random_delay(0.1, 0.2)
+            self._input_text_block(remaining)
 
     def _upload_images_at_markers(
         self,
@@ -1322,6 +1418,53 @@ class NaverBlogPublisher:
 
         return result
 
+    def _collect_all_markers(self, content: str, images: List[str] = None) -> List[dict]:
+        """
+        모든 마커(이미지 + 컴포넌트)를 수집하여 위치순으로 정렬
+
+        Args:
+            content: 본문 내용
+            images: 이미지 경로 리스트 (없으면 이미지 마커 무시)
+
+        Returns:
+            위치순 정렬된 마커 리스트
+        """
+        all_markers = []
+        image_count = len(images) if images else 0
+
+        # 이미지 마커 수집
+        img_pattern = r'\{img:(\d+)(?:-(\d+))?\}'
+        for match in re.finditer(img_pattern, content):
+            start_num = int(match.group(1))
+            end_num = int(match.group(2)) if match.group(2) else start_num
+
+            # 이미지가 있고 범위 내인 경우만 추가
+            if images and start_num <= image_count:
+                all_markers.append({
+                    'type': 'image',
+                    'match': match.group(0),
+                    'start': match.start(),
+                    'end': match.end(),
+                    'img_start': start_num,
+                    'img_end': min(end_num, image_count)
+                })
+
+        # 컴포넌트 마커 수집
+        if HAS_HTML_COMPONENTS:
+            comp_markers = ComponentMarkerProcessor.find_all_markers(content)
+            for m in comp_markers:
+                all_markers.append({
+                    'type': m['type'],
+                    'match': m['match'],
+                    'start': m['start'],
+                    'end': m['end'],
+                    'data': m.get('data')
+                })
+
+        # 위치순 정렬
+        all_markers.sort(key=lambda x: x['start'])
+        return all_markers
+
     def _input_content_with_images(
         self,
         content: str,
@@ -1329,67 +1472,44 @@ class NaverBlogPublisher:
         update_progress
     ):
         """
-        본문 입력 + 이미지 삽입 (마커 위치에 클립보드 붙여넣기)
+        본문 입력 + 이미지/컴포넌트 삽입 (일반 모드)
 
         Args:
-            content: 본문 내용 (이미지 마커 포함: {img:1}, {img:1-5})
+            content: 본문 내용 (마커 포함)
             images: 이미지 파일 경로 리스트
             update_progress: 진행률 콜백
         """
-        # 이미지 마커 패턴: {img:1}, {img:1-5}
-        marker_pattern = r'\{img:(\d+)(?:-(\d+))?\}'
-
         image_count = len(images)
         inserted_images = 0
 
-        # 마커 정보 수집 (위치와 범위)
-        markers = []
-        for match in re.finditer(marker_pattern, content):
-            start_num = int(match.group(1))
-            end_num = int(match.group(2)) if match.group(2) else start_num
-            markers.append({
-                'full_match': match.group(0),
-                'start': start_num,
-                'end': end_num,
-                'pos': match.start()
-            })
+        # 모든 마커 수집 (이미지 + 컴포넌트)
+        all_markers = self._collect_all_markers(content, images)
 
-        if not markers:
-            # 마커가 없으면 텍스트만 입력
+        if not all_markers:
+            # 마커가 없으면 그냥 텍스트 입력
             self._input_long_text(content)
             return
 
-        # 본문을 마커 위치 기준으로 처리
+        self.log(f"마커 {len(all_markers)}개 발견 (이미지+컴포넌트)")
+
+        # 마커 위치 기준으로 처리
         last_pos = 0
-        for marker in markers:
+        for marker in all_markers:
             # 마커 앞의 텍스트 입력
-            text_before = content[last_pos:marker['pos']]
-            if text_before:
-                lines = text_before.split('\n')
-                for i, line in enumerate(lines):
-                    if line.strip():
-                        pyperclip.copy(line)
-                        self._random_delay(0.1, 0.2)
-                        self.page.keyboard.press("Control+v")
-                        self._random_delay(0.1, 0.2)
+            text_before = content[last_pos:marker['start']]
+            if text_before.strip():
+                self._input_text_block(text_before)
 
-                    if i < len(lines) - 1:
-                        self.page.keyboard.press("Enter")
-                        self._random_delay(0.03, 0.08)
-
-            # 마커 위치에 이미지 삽입 (범위: start ~ end)
-            # 연속 이미지는 공백 없이 바로 붙여넣기
-            for idx, img_num in enumerate(range(marker['start'], marker['end'] + 1)):
-                if img_num <= image_count:
-                    img_path = images[img_num - 1]  # 1-based to 0-based
-
+            # 마커 종류별 처리
+            if marker['type'] == 'image':
+                # 이미지 삽입
+                for idx, img_num in enumerate(range(marker['img_start'], marker['img_end'] + 1)):
+                    img_path = images[img_num - 1]
                     if os.path.exists(img_path):
-                        # 첫 번째 이미지 앞에만 줄바꿈 추가
                         if idx == 0:
                             self.page.keyboard.press("Enter")
                             self._random_delay(0.2, 0.4)
 
-                        # 이미지 삽입
                         inserted_images += 1
                         update_progress(f"이미지 {inserted_images} 삽입 중...", 50 + inserted_images * 3)
 
@@ -1399,23 +1519,31 @@ class NaverBlogPublisher:
                             self.log(f"이미지 {img_num} 삽입 실패")
 
                         self._random_delay(0.2, 0.4)
+            else:
+                # 컴포넌트 삽입 (버튼 클릭 방식)
+                self.page.keyboard.press("Enter")
+                self._random_delay(0.1, 0.2)
 
-            last_pos = marker['pos'] + len(marker['full_match'])
+                # iframe 프레임 가져오기
+                frame = self.page.frame_locator("#mainFrame")
+                marker_type = marker['type']
+                if marker_type == 'hr':
+                    self._insert_horizontal_line_via_button(frame)
+                elif marker_type == 'quote':
+                    quote_text = marker.get('data', '')
+                    self._insert_quotation_via_button(quote_text, frame)
+                elif marker_type in ('table', 'markdown_table'):
+                    self.log(f"[!] 표 마커는 아직 미지원")
+                self._random_delay(0.2, 0.4)
+
+            last_pos = marker['end']
 
         # 마지막 마커 뒤의 텍스트 입력
-        remaining_text = content[last_pos:]
-        if remaining_text:
-            lines = remaining_text.split('\n')
-            for i, line in enumerate(lines):
-                if line.strip():
-                    pyperclip.copy(line)
-                    self._random_delay(0.1, 0.2)
-                    self.page.keyboard.press("Control+v")
-                    self._random_delay(0.1, 0.2)
-
-                if i < len(lines) - 1:
-                    self.page.keyboard.press("Enter")
-                    self._random_delay(0.03, 0.08)
+        remaining = content[last_pos:]
+        if remaining.strip():
+            self.page.keyboard.press("Enter")
+            self._random_delay(0.1, 0.2)
+            self._input_text_block(remaining)
 
         self.log(f"총 {inserted_images}개 이미지 삽입 완료")
 
@@ -1427,66 +1555,45 @@ class NaverBlogPublisher:
         frame
     ):
         """
-        본문 입력 + 이미지 삽입 (헤드리스 모드용 - file input 방식)
+        본문 입력 + 이미지/컴포넌트 삽입 (헤드리스 모드)
 
         Args:
-            content: 본문 내용 (이미지 마커 포함: {img:1}, {img:1-5})
+            content: 본문 내용 (마커 포함)
             images: 이미지 파일 경로 리스트
             update_progress: 진행률 콜백
             frame: iframe 프레임 로케이터
         """
-        # 이미지 마커 패턴: {img:1}, {img:1-5}
-        marker_pattern = r'\{img:(\d+)(?:-(\d+))?\}'
-
         image_count = len(images)
         inserted_images = 0
 
-        # 마커 정보 수집 (위치와 범위)
-        markers = []
-        for match in re.finditer(marker_pattern, content):
-            start_num = int(match.group(1))
-            end_num = int(match.group(2)) if match.group(2) else start_num
-            markers.append({
-                'full_match': match.group(0),
-                'start': start_num,
-                'end': end_num,
-                'pos': match.start()
-            })
+        # 모든 마커 수집 (이미지 + 컴포넌트)
+        all_markers = self._collect_all_markers(content, images)
 
-        if not markers:
-            # 마커가 없으면 텍스트만 입력
+        if not all_markers:
+            # 마커가 없으면 그냥 텍스트 입력
             self._input_long_text(content)
             return
 
-        # 본문을 마커 위치 기준으로 처리
+        self.log(f"마커 {len(all_markers)}개 발견 (이미지+컴포넌트)")
+
+        # 마커 위치 기준으로 처리
         last_pos = 0
-        for marker in markers:
+        for marker in all_markers:
             # 마커 앞의 텍스트 입력
-            text_before = content[last_pos:marker['pos']]
-            if text_before:
-                lines = text_before.split('\n')
-                for i, line in enumerate(lines):
-                    if line.strip():
-                        # 헤드리스 모드에서는 insert_text 사용 (type보다 훨씬 빠름)
-                        self.page.keyboard.insert_text(line)
-                        self._random_delay(0.02, 0.05)
+            text_before = content[last_pos:marker['start']]
+            if text_before.strip():
+                self._input_text_block(text_before)
 
-                    if i < len(lines) - 1:
-                        self.page.keyboard.press("Enter")
-                        self._random_delay(0.02, 0.05)
-
-            # 마커 위치에 이미지 삽입 (file input 방식)
-            for idx, img_num in enumerate(range(marker['start'], marker['end'] + 1)):
-                if img_num <= image_count:
-                    img_path = images[img_num - 1]  # 1-based to 0-based
-
+            # 마커 종류별 처리
+            if marker['type'] == 'image':
+                # 이미지 삽입 (file input 방식)
+                for idx, img_num in enumerate(range(marker['img_start'], marker['img_end'] + 1)):
+                    img_path = images[img_num - 1]
                     if os.path.exists(img_path):
-                        # 첫 번째 이미지 앞에만 줄바꿈 추가
                         if idx == 0:
                             self.page.keyboard.press("Enter")
                             self._random_delay(0.2, 0.4)
 
-                        # 이미지 삽입
                         inserted_images += 1
                         update_progress(f"이미지 {inserted_images} 삽입 중...", 50 + inserted_images * 3)
 
@@ -1496,21 +1603,29 @@ class NaverBlogPublisher:
                             self.log(f"이미지 {img_num} 삽입 실패")
 
                         self._random_delay(0.3, 0.6)
+            else:
+                # 컴포넌트 삽입 (버튼 클릭 방식)
+                self.page.keyboard.press("Enter")
+                self._random_delay(0.1, 0.2)
 
-            last_pos = marker['pos'] + len(marker['full_match'])
+                marker_type = marker['type']
+                if marker_type == 'hr':
+                    self._insert_horizontal_line_via_button(frame)
+                elif marker_type == 'quote':
+                    quote_text = marker.get('data', '')
+                    self._insert_quotation_via_button(quote_text, frame)
+                elif marker_type in ('table', 'markdown_table'):
+                    self.log(f"[!] 표 마커는 아직 미지원")
+                self._random_delay(0.2, 0.4)
+
+            last_pos = marker['end']
 
         # 마지막 마커 뒤의 텍스트 입력
-        remaining_text = content[last_pos:]
-        if remaining_text:
-            lines = remaining_text.split('\n')
-            for i, line in enumerate(lines):
-                if line.strip():
-                    self.page.keyboard.insert_text(line)
-                    self._random_delay(0.02, 0.05)
-
-                if i < len(lines) - 1:
-                    self.page.keyboard.press("Enter")
-                    self._random_delay(0.02, 0.05)
+        remaining = content[last_pos:]
+        if remaining.strip():
+            self.page.keyboard.press("Enter")
+            self._random_delay(0.1, 0.2)
+            self._input_text_block(remaining)
 
         self.log(f"총 {inserted_images}개 이미지 삽입 완료 (헤드리스)")
 
@@ -1567,6 +1682,187 @@ class NaverBlogPublisher:
         """이미지 마커 제거"""
         pattern = r'\{img:\d+(?:-\d+)?\}'
         return re.sub(pattern, '', content)
+
+    def _remove_component_markers(self, content: str) -> str:
+        """컴포넌트 마커 제거 (구분선, 인용구, 표)"""
+        if not HAS_HTML_COMPONENTS:
+            return content
+        return ComponentMarkerProcessor.remove_markers(content)
+
+    def _insert_quotation_via_button(self, text: str, frame) -> bool:
+        """인용구 버튼을 클릭해서 인용구 삽입
+
+        Args:
+            text: 인용구 텍스트
+            frame: iframe 프레임
+
+        Returns:
+            성공 여부
+        """
+        try:
+            # 인용구 버튼 찾기
+            quotation_btn = frame.locator("button[data-name='quotation']")
+            if quotation_btn.count() == 0:
+                self.log("[X] 인용구 버튼을 찾을 수 없음")
+                return False
+
+            # visible 버튼 클릭
+            for i in range(quotation_btn.count()):
+                btn = quotation_btn.nth(i)
+                if btn.is_visible():
+                    btn.click()
+                    self._random_delay(0.3, 0.6)
+                    break
+            else:
+                self.log("[X] visible 인용구 버튼 없음")
+                return False
+
+            # 인용구 텍스트 입력
+            if self.headless:
+                self.page.keyboard.insert_text(text)
+            else:
+                pyperclip.copy(text)
+                self._random_delay(0.1, 0.2)
+                self.page.keyboard.press("Control+v")
+
+            self._random_delay(0.3, 0.5)
+
+            # 인용구에서 나가기: 아래 화살표 3번 + Enter로 새 단락 시작
+            self.page.keyboard.press("ArrowDown")
+            self._random_delay(0.05, 0.1)
+            self.page.keyboard.press("ArrowDown")
+            self._random_delay(0.05, 0.1)
+            self.page.keyboard.press("ArrowDown")
+            self._random_delay(0.1, 0.2)
+
+            self.log(f"[OK] 인용구 삽입 성공")
+            return True
+
+        except Exception as e:
+            self.log(f"[X] 인용구 삽입 오류: {e}")
+            return False
+
+    def _insert_horizontal_line_via_button(self, frame) -> bool:
+        """구분선 버튼을 클릭해서 구분선 삽입
+
+        Args:
+            frame: iframe 프레임
+
+        Returns:
+            성공 여부
+        """
+        try:
+            # 구분선 버튼 찾기 (두 가지 이름 존재)
+            hr_btn = frame.locator("button[data-name='horizontalLine'], button[data-name='horizontal-line']")
+            if hr_btn.count() == 0:
+                self.log("[X] 구분선 버튼을 찾을 수 없음")
+                return False
+
+            # visible 버튼 클릭
+            for i in range(hr_btn.count()):
+                btn = hr_btn.nth(i)
+                if btn.is_visible():
+                    btn.click()
+                    self._random_delay(0.3, 0.6)
+                    self.log(f"[OK] 구분선 삽입 성공")
+                    return True
+
+            self.log("[X] visible 구분선 버튼 없음")
+            return False
+
+        except Exception as e:
+            self.log(f"[X] 구분선 삽입 오류: {e}")
+            return False
+
+    def _inject_html_component(self, html: str, description: str = "컴포넌트") -> bool:
+        """HTML 컴포넌트를 에디터에 삽입 (JavaScript injection) - 레거시, 사용 안함
+
+        Args:
+            html: 삽입할 HTML 문자열
+            description: 로그용 설명
+
+        Returns:
+            성공 여부
+        """
+        try:
+            main_frame = self.page.frame('mainFrame')
+            if not main_frame:
+                self.log(f"[X] {description} 삽입 실패: mainFrame 없음")
+                return False
+
+            # HTML 이스케이프
+            escaped_html = html.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$').replace('\n', ' ')
+
+            js_code = f'''
+            (() => {{
+                const textComponent = document.querySelector('.se-component.se-text');
+                if (!textComponent) {{
+                    return {{ success: false, error: 'text component not found' }};
+                }}
+
+                const temp = document.createElement('div');
+                temp.innerHTML = `{escaped_html}`;
+                const newComponent = temp.firstElementChild;
+
+                if (!newComponent) {{
+                    return {{ success: false, error: 'component parse failed' }};
+                }}
+
+                textComponent.parentNode.insertBefore(newComponent, textComponent.nextSibling);
+                return {{ success: true }};
+            }})();
+            '''
+
+            result = main_frame.evaluate(js_code)
+            if result.get('success'):
+                self.log(f"[OK] {description} 삽입 성공")
+                return True
+            else:
+                self.log(f"[X] {description} 삽입 실패: {result.get('error')}")
+                return False
+
+        except Exception as e:
+            self.log(f"[X] {description} 삽입 오류: {e}")
+            return False
+
+    def _process_component_markers(self, content: str) -> str:
+        """컴포넌트 마커 처리 (텍스트 입력 후 injection)
+
+        Args:
+            content: 마커가 포함된 콘텐츠
+
+        Returns:
+            마커가 제거된 콘텐츠 (컴포넌트는 별도 injection)
+        """
+        if not HAS_HTML_COMPONENTS:
+            return content
+
+        markers = ComponentMarkerProcessor.find_all_markers(content)
+
+        if not markers:
+            return content
+
+        self.log(f"컴포넌트 마커 {len(markers)}개 발견")
+
+        # 마커를 injection 처리
+        for marker in markers:
+            html = ComponentMarkerProcessor.get_component_html(marker)
+            if html:
+                marker_type = marker['type']
+                if marker_type == 'hr':
+                    desc = "구분선"
+                elif marker_type == 'quote':
+                    desc = "인용구"
+                elif marker_type in ('table', 'markdown_table'):
+                    desc = "표"
+                else:
+                    desc = "컴포넌트"
+
+                self._inject_html_component(html, desc)
+                self._random_delay(0.3, 0.5)
+
+        # 마커 제거된 콘텐츠 반환
+        return ComponentMarkerProcessor.remove_markers(content)
 
     def _copy_image_to_clipboard(self, image_path: str) -> bool:
         """

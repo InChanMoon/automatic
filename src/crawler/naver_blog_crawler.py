@@ -247,10 +247,12 @@ class NaverBlogCrawler:
                     result.append(text)
 
             elif comp_type == 'quotation':
-                # 인용문 추출
+                # 인용문 추출 → {quote:텍스트} 마커로 변환
                 text = self._extract_quotation(block)
                 if text.strip():
-                    result.append(f'> {text}')
+                    # 줄바꿈을 공백으로 치환 (마커 안에서는 한 줄로)
+                    text_oneline = text.replace('\n', ' ').strip()
+                    result.append(f'{{quote:{text_oneline}}}')
 
             elif comp_type == 'table':
                 # 표 추출

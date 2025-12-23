@@ -304,7 +304,7 @@ class PublisherBot:
 
         # 메인 창 중앙에 위치
         dlg.update_idletasks()
-        w, h = 280, 250
+        w, h = 280, 290
         x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
         dlg.geometry(f"{w}x{h}+{x}+{y}")

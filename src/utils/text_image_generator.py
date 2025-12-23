@@ -265,6 +265,30 @@ def extract_first_sentence(paragraph: str) -> str:
     return paragraph[:50].strip() if len(paragraph) > 50 else paragraph.strip()
 
 
+def remove_all_markers(content: str) -> str:
+    """
+    본문에서 모든 마커 제거 (이미지, 컴포넌트)
+
+    Args:
+        content: 본문 내용
+
+    Returns:
+        마커가 제거된 본문
+    """
+    # 이미지 마커 제거: {img:1}, {img:1-5}
+    clean = re.sub(r'\{img:\d+(?:-\d+)?\}', '', content)
+
+    # 컴포넌트 마커 제거
+    clean = re.sub(r'\{hr\}', '', clean)  # 구분선
+    clean = re.sub(r'\{quote:[^}]+\}', '', clean)  # 인용구
+    clean = re.sub(r'\{table:[^}]+\}', '', clean)  # 표
+
+    # 마크다운 표도 제거 (| 로 시작하는 연속 행)
+    clean = re.sub(r'(\|[^\n]+\|\n?)+', '', clean)
+
+    return clean
+
+
 def has_paragraph_structure(content: str) -> bool:
     """
     단락 구조가 있는지 확인
@@ -275,9 +299,8 @@ def has_paragraph_structure(content: str) -> bool:
     Returns:
         단락 구조 여부 (2개 이상의 빈 줄로 구분된 단락이 있으면 True)
     """
-    # 이미지 마커 제거
-    import re
-    clean_content = re.sub(r'\{img:\d+(?:-\d+)?\}', '', content)
+    # 모든 마커 제거 (이미지 + 컴포넌트)
+    clean_content = remove_all_markers(content)
 
     # 연속 줄바꿈으로 분리
     paragraphs = [p.strip() for p in clean_content.split('\n\n') if p.strip()]
@@ -353,8 +376,8 @@ def generate_images_from_markers(
     if max_img_num >= 2:
         # 단락 구조 확인
         if has_paragraph_structure(content):
-            # 마커 제거한 본문에서 단락 추출
-            clean_content = re.sub(r'\{img:\d+(?:-\d+)?\}\s*', '', content)
+            # 모든 마커 제거한 본문에서 단락 추출 (이미지 + 컴포넌트)
+            clean_content = remove_all_markers(content)
             paragraphs = [p.strip() for p in clean_content.split('\n\n') if p.strip()]
 
             # 2번부터 필요한 만큼 이미지 생성
