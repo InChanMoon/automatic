@@ -419,7 +419,12 @@ class NaverBlogCrawler:
         return '\n'.join(lines)
 
     def _extract_table(self, comp_html):
-        """표 컴포넌트에서 텍스트 추출"""
+        """표 컴포넌트에서 {table:...} 마커로 변환
+
+        형식: {table:셀1<C>셀2<C>셀3<R>셀4<C>셀5<C>셀6<R>...}
+        - 행은 <R> 로 구분
+        - 열은 <C> 로 구분
+        """
         # <table> 찾기
         table_match = re.search(
             r'<table[^>]*class="[^"]*se-table[^"]*"[^>]*>(.*?)</table>',
@@ -438,7 +443,7 @@ class NaverBlogCrawler:
         if not rows:
             return ''
 
-        lines = []
+        row_data = []
 
         for row_html in rows:
             # <th> 또는 <td> 셀 추출
@@ -450,21 +455,24 @@ class NaverBlogCrawler:
                 while '<span' in cell_html:
                     cell_html = re.sub(r'<span[^>]*>(.*?)</span>', r'\1', cell_html, count=1, flags=re.DOTALL)
 
-                # 스타일 태그 보존
-                cell_html = re.sub(r'<b>(.*?)</b>', r'**\1**', cell_html)
-                cell_html = re.sub(r'<i>(.*?)</i>', r'*\1*', cell_html)
+                # 스타일 태그 제거 (마커 안에서는 불필요)
+                cell_html = re.sub(r'<b>(.*?)</b>', r'\1', cell_html)
+                cell_html = re.sub(r'<i>(.*?)</i>', r'\1', cell_html)
 
                 # 나머지 태그 제거
                 cell_text = re.sub(r'<[^>]+>', '', cell_html)
                 cell_text = self._decode_entities(cell_text)
 
-                if cell_text.strip():
-                    cell_texts.append(cell_text.strip())
+                cell_texts.append(cell_text.strip())
 
             if cell_texts:
-                lines.append('| ' + ' | '.join(cell_texts) + ' |')
+                row_data.append('<C>'.join(cell_texts))
 
-        return '\n'.join(lines)
+        if not row_data:
+            return ''
+
+        # {table:행1<R>행2<R>행3} 형식으로 반환
+        return '{table:' + '<R>'.join(row_data) + '}'
 
     def _decode_entities(self, text):
         """HTML 엔티티 디코딩"""

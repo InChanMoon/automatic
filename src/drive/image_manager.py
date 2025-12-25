@@ -5,6 +5,7 @@ Google Drive 이미지 매니저 V2
 - 이미지 인덱스는 스프레드시트에 저장되어 영속성 보장
 """
 
+import sys
 import os
 import io
 import json
@@ -17,13 +18,20 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 
+def _get_resource_path(relative_path):
+    """PyInstaller EXE 호환 리소스 경로"""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath('.'), relative_path)
+
+
 class DriveImageManager:
     """Google Drive 이미지 매니저 클래스"""
 
     def __init__(
         self,
-        config_path: str = "config.json",
-        credentials_path: str = "credentials/google_service_account.json",
+        config_path: str = None,
+        credentials_path: str = None,
         cache_dir: str = "image_cache",
         settings_mgr=None,
         group_name: str = None
@@ -32,12 +40,18 @@ class DriveImageManager:
         초기화
 
         Args:
-            config_path: config.json 경로
-            credentials_path: Service Account JSON 경로
+            config_path: config.json 경로 (None이면 자동 탐색)
+            credentials_path: Service Account JSON 경로 (None이면 자동 탐색)
             cache_dir: 로컬 이미지 캐시 폴더
             settings_mgr: PublishSettingsManager 인스턴스 (인덱스 영속성용)
             group_name: 그룹명 (인덱스 저장용)
         """
+        # PyInstaller EXE 호환 경로 처리
+        if config_path is None:
+            config_path = _get_resource_path('config.json')
+        if credentials_path is None:
+            credentials_path = _get_resource_path('credentials/google_service_account.json')
+
         # Config 로드
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = json.load(f)

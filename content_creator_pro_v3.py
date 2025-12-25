@@ -193,7 +193,7 @@ class ContentCreatorProV3:
         main_frame.pack(fill='both', expand=True)
 
         # 안내
-        tk.Label(main_frame, text="💡 AI 없이 직접 원고를 입력하여 등록합니다 (라이선스 사용량 차감 없음)",
+        tk.Label(main_frame, text="💡 AI 없이 직접 원고를 입력하여 등록합니다",
                 bg='#E8F5E9', fg='#2E7D32', font=('맑은 고딕', 9), padx=8, pady=4).pack(fill='x', pady=(0, 8))
 
         # 키워드 + 계정 그룹
@@ -984,6 +984,17 @@ class ContentCreatorProV3:
                  bg='#2196F3', fg='white', font=('맑은 고딕', 9, 'bold'),
                  relief='flat', cursor='hand2', padx=10).pack(side='left')
 
+        # 상태 토글 버튼 (draft ↔ ready)
+        tk.Button(filter_frame, text="선택 토글", command=self.toggle_selected_status,
+                 bg='#9C27B0', fg='white', font=('맑은 고딕', 9, 'bold'),
+                 relief='flat', cursor='hand2', padx=8).pack(side='left', padx=(5, 0))
+        tk.Button(filter_frame, text="전체→대기", command=self.set_all_to_ready,
+                 bg='#4CAF50', fg='white', font=('맑은 고딕', 9, 'bold'),
+                 relief='flat', cursor='hand2', padx=8).pack(side='left', padx=(5, 0))
+        tk.Button(filter_frame, text="전체→초안", command=self.set_all_to_draft,
+                 bg='#03A9F4', fg='white', font=('맑은 고딕', 9, 'bold'),
+                 relief='flat', cursor='hand2', padx=8).pack(side='left', padx=(5, 0))
+
         tk.Button(filter_frame, text="🗑️ 삭제", command=self.delete_content,
                  bg='#F44336', fg='white', font=('맑은 고딕', 9, 'bold'),
                  relief='flat', cursor='hand2', padx=10).pack(side='right')
@@ -996,11 +1007,13 @@ class ContentCreatorProV3:
         legend_frame = tk.Frame(filter_frame, bg='white')
         legend_frame.pack(side='left', padx=(15, 0))
 
-        tk.Label(legend_frame, text="●", fg='#2196F3', bg='white', font=('맑은 고딕', 8)).pack(side='left')
-        tk.Label(legend_frame, text="대기", bg='white', font=('맑은 고딕', 8), fg='#666').pack(side='left', padx=(0, 8))
-        tk.Label(legend_frame, text="●", fg='#FF9800', bg='white', font=('맑은 고딕', 8)).pack(side='left')
-        tk.Label(legend_frame, text="발행중", bg='white', font=('맑은 고딕', 8), fg='#666').pack(side='left', padx=(0, 8))
+        tk.Label(legend_frame, text="●", fg='#03A9F4', bg='white', font=('맑은 고딕', 8)).pack(side='left')
+        tk.Label(legend_frame, text="초안", bg='white', font=('맑은 고딕', 8), fg='#666').pack(side='left', padx=(0, 6))
         tk.Label(legend_frame, text="●", fg='#4CAF50', bg='white', font=('맑은 고딕', 8)).pack(side='left')
+        tk.Label(legend_frame, text="대기", bg='white', font=('맑은 고딕', 8), fg='#666').pack(side='left', padx=(0, 6))
+        tk.Label(legend_frame, text="●", fg='#FF9800', bg='white', font=('맑은 고딕', 8)).pack(side='left')
+        tk.Label(legend_frame, text="발행중", bg='white', font=('맑은 고딕', 8), fg='#666').pack(side='left', padx=(0, 6))
+        tk.Label(legend_frame, text="●", fg='#9E9E9E', bg='white', font=('맑은 고딕', 8)).pack(side='left')
         tk.Label(legend_frame, text="완료", bg='white', font=('맑은 고딕', 8), fg='#666').pack(side='left')
 
         # 리스트
@@ -1017,8 +1030,8 @@ class ContentCreatorProV3:
         scrollbar_x = tk.Scrollbar(tree_container, orient='horizontal')
         scrollbar_x.pack(side='bottom', fill='x')
 
-        # 컬럼: No, 그룹, 키워드, 제목, 예약시간, 생성시간, 보기, content_id(숨김)
-        columns = ('No', '그룹', '키워드', '제목', '예약시간', '생성시간', '보기', 'content_id')
+        # 컬럼: No, 그룹, 키워드, 제목, 상태, 예약시간, 생성시간, 보기, content_id(숨김)
+        columns = ('No', '그룹', '키워드', '제목', '상태', '예약시간', '생성시간', '보기', 'content_id')
         self.content_tree = ttk.Treeview(tree_container, columns=columns, show='headings',
                                         yscrollcommand=scrollbar_y.set,
                                         xscrollcommand=scrollbar_x.set, height=20)
@@ -1027,6 +1040,7 @@ class ContentCreatorProV3:
         self.content_tree.heading('그룹', text='그룹')
         self.content_tree.heading('키워드', text='키워드')
         self.content_tree.heading('제목', text='제목')
+        self.content_tree.heading('상태', text='상태')
         self.content_tree.heading('예약시간', text='예약시간')
         self.content_tree.heading('생성시간', text='생성시간')
         self.content_tree.heading('보기', text='보기')
@@ -1036,16 +1050,18 @@ class ContentCreatorProV3:
         self.content_tree.column('그룹', width=50, minwidth=40)
         self.content_tree.column('키워드', width=80, minwidth=60)
         self.content_tree.column('제목', width=200, minwidth=120)
+        self.content_tree.column('상태', width=45, minwidth=40, anchor='center')
         self.content_tree.column('예약시간', width=110, minwidth=90)
         self.content_tree.column('생성시간', width=110, minwidth=90)
         self.content_tree.column('보기', width=40, minwidth=40, anchor='center')
         self.content_tree.column('content_id', width=0, minwidth=0, stretch=False)
 
         # 상태별 색상 태그 정의
-        self.content_tree.tag_configure('ready', foreground='#2196F3')
-        self.content_tree.tag_configure('publishing', foreground='#FF9800')
-        self.content_tree.tag_configure('published', foreground='#4CAF50')
-        self.content_tree.tag_configure('failed', foreground='#F44336')
+        self.content_tree.tag_configure('draft', foreground='#03A9F4')      # 하늘색
+        self.content_tree.tag_configure('ready', foreground='#4CAF50')      # 녹색
+        self.content_tree.tag_configure('publishing', foreground='#FF9800') # 주황
+        self.content_tree.tag_configure('published', foreground='#9E9E9E')  # 회색
+        self.content_tree.tag_configure('failed', foreground='#F44336')     # 빨강
 
         self.content_tree.pack(fill='both', expand=True)
         scrollbar_y.config(command=self.content_tree.yview)
@@ -1703,25 +1719,28 @@ class ContentCreatorProV3:
             )
 
             status_filter = self.status_filter.get()
-            status_map = {
-                '전체': None,
-                '대기': 'ready',
-                '발행 중': 'publishing',
-                '발행 완료': 'published'
-            }
-
-            filter_status = status_map.get(status_filter)
 
             # 생성시간 기준 오름차순 정렬 (오래된 것 위, 최신 아래)
             contents_sorted = sorted(contents, key=lambda x: x.get('created_time', ''))
 
             row_num = 0
             for content in contents_sorted:
-                if filter_status and content['status'] != filter_status:
-                    continue
+                status = content['status']
+
+                # 필터 적용
+                if status_filter == '대기':
+                    # 대기: draft + ready 둘 다 표시
+                    if status not in ('draft', 'ready'):
+                        continue
+                elif status_filter == '발행 중':
+                    if status != 'publishing':
+                        continue
+                elif status_filter == '발행 완료':
+                    if status != 'published':
+                        continue
+                # '전체'는 필터 없음
 
                 row_num += 1
-                status = content['status']
 
                 # 예약시간 표시
                 scheduled = content.get('scheduled_time', '즉시발행')
@@ -1734,11 +1753,15 @@ class ContentCreatorProV3:
                 # 발행글 링크 버튼 (published 상태에서만 '보기' 표시)
                 view_btn = '보기' if status == 'published' and content.get('published_url') else ''
 
+                # 상태 표시 텍스트
+                status_text = {'draft': '초안', 'ready': '대기', 'publishing': '발행중', 'published': '완료', 'failed': '실패'}.get(status, status)
+
                 self.content_tree.insert('', 'end', values=(
                     row_num,
                     content.get('account_group', ''),
                     content['keyword'],
                     content['title'][:35] + '...' if len(content['title']) > 35 else content['title'],
+                    status_text,
                     scheduled,
                     created_time,
                     view_btn,
@@ -1760,11 +1783,11 @@ class ContentCreatorProV3:
         if not item:
             return
 
-        # 보기 컬럼 클릭 (#7 = 7번째 컬럼)
-        if column == '#7':
+        # 보기 컬럼 클릭 (#8 = 8번째 컬럼)
+        if column == '#8':
             values = self.content_tree.item(item, 'values')
-            if values and values[6] == '보기':
-                content_id = values[7]  # 숨김 컬럼에서 ID 가져오기
+            if values and values[7] == '보기':
+                content_id = values[8]  # 숨김 컬럼에서 ID 가져오기
                 self._open_published_url(content_id)
 
     def _open_published_url(self, content_id):
@@ -1798,7 +1821,7 @@ class ContentCreatorProV3:
             return
 
         item = self.content_tree.item(selected[0])
-        content_id = item['values'][7] if item['values'] and len(item['values']) > 7 else None
+        content_id = item['values'][8] if item['values'] and len(item['values']) > 8 else None
 
         if not content_id:
             self.show_error("콘텐츠 ID를 찾을 수 없습니다")
@@ -1821,6 +1844,109 @@ class ContentCreatorProV3:
 
         except Exception as e:
             self.show_error(f"삭제 실패: {str(e)[:30]}")
+
+    def toggle_selected_status(self):
+        """선택된 항목의 상태 토글 (draft ↔ ready)"""
+        selected = self.content_tree.selection()
+        if not selected:
+            self.show_error("토글할 항목을 선택하세요")
+            return
+
+        if not self.current_license:
+            return
+
+        is_admin = self.current_license.get('tier', '') == 'admin'
+
+        for item_id in selected:
+            item = self.content_tree.item(item_id)
+            values = item['values']
+            if not values or len(values) < 9:
+                continue
+
+            content_id = values[8]  # content_id
+            current_status_text = values[4]  # 상태 텍스트 (초안/대기)
+
+            # draft ↔ ready 토글
+            if current_status_text == '초안':
+                new_status = 'ready'
+            elif current_status_text == '대기':
+                new_status = 'draft'
+            else:
+                continue  # 다른 상태는 토글 안함
+
+            try:
+                self.content_mgr.update_content_status(
+                    content_id=content_id,
+                    status=new_status,
+                    license_key=self.current_license['license_key']
+                )
+            except:
+                pass
+
+        self.refresh_content_list()
+
+    def set_all_to_ready(self):
+        """현재 보이는 draft 항목 전체를 ready로 변경"""
+        if not self.current_license:
+            return
+
+        is_admin = self.current_license.get('tier', '') == 'admin'
+        count = 0
+
+        for item_id in self.content_tree.get_children():
+            item = self.content_tree.item(item_id)
+            values = item['values']
+            if not values or len(values) < 9:
+                continue
+
+            content_id = values[8]
+            current_status_text = values[4]
+
+            if current_status_text == '초안':
+                try:
+                    self.content_mgr.update_content_status(
+                        content_id=content_id,
+                        status='ready',
+                        license_key=self.current_license['license_key']
+                    )
+                    count += 1
+                except:
+                    pass
+
+        self.refresh_content_list()
+        if count > 0:
+            self.show_success(f"{count}개 → 대기 상태로 변경")
+
+    def set_all_to_draft(self):
+        """현재 보이는 ready 항목 전체를 draft로 변경"""
+        if not self.current_license:
+            return
+
+        count = 0
+
+        for item_id in self.content_tree.get_children():
+            item = self.content_tree.item(item_id)
+            values = item['values']
+            if not values or len(values) < 9:
+                continue
+
+            content_id = values[8]
+            current_status_text = values[4]
+
+            if current_status_text == '대기':
+                try:
+                    self.content_mgr.update_content_status(
+                        content_id=content_id,
+                        status='draft',
+                        license_key=self.current_license['license_key']
+                    )
+                    count += 1
+                except:
+                    pass
+
+        self.refresh_content_list()
+        if count > 0:
+            self.show_success(f"{count}개 → 초안 상태로 변경")
 
 
 def main():

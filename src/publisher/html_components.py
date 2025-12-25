@@ -72,7 +72,10 @@ def parse_table_marker(marker_content: str) -> Tuple[int, int, Optional[List[Lis
     """표 마커 파싱
 
     Args:
-        marker_content: 마커 내용 (예: "3x4" 또는 "헤더1,헤더2|데이터1,데이터2")
+        marker_content: 마커 내용
+            - "3x4" 형식 (빈 표)
+            - "셀1<C>셀2<R>셀3<C>셀4" 형식 (새 구분자)
+            - "헤더1,헤더2|데이터1,데이터2" 형식 (레거시)
 
     Returns:
         (rows, cols, cell_data)
@@ -84,13 +87,27 @@ def parse_table_marker(marker_content: str) -> Tuple[int, int, Optional[List[Lis
         cols = int(size_match.group(2))
         return (rows, cols, None)
 
-    # 패턴 2: "데이터1,데이터2|데이터3,데이터4" 형식
+    # 패턴 2: 새 구분자 "<C>", "<R>" 형식
+    if '<R>' in marker_content or '<C>' in marker_content:
+        rows_data = marker_content.split('<R>')
+        cell_data = []
+        max_cols = 0
+        for row_str in rows_data:
+            cells = [c.strip() for c in row_str.split('<C>')]
+            cell_data.append(cells)
+            max_cols = max(max_cols, len(cells))
+
+        return (len(cell_data), max_cols, cell_data)
+
+    # 패턴 3: 레거시 ",", "|" 형식 (하위 호환)
     if '|' in marker_content or ',' in marker_content:
         rows_data = marker_content.split('|')
         cell_data = []
         max_cols = 0
         for row_str in rows_data:
             cells = [c.strip() for c in row_str.split(',')]
+            # 이스케이프된 전각 문자 복원
+            cells = [c.replace('，', ',').replace('｜', '|') for c in cells]
             cell_data.append(cells)
             max_cols = max(max_cols, len(cells))
 

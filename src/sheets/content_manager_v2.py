@@ -269,7 +269,7 @@ class ContentManagerV2(SheetsBase):
             '',                       # G: published_time (빈값)
             '',                       # H: published_account (빈값)
             content_id,               # I: content_id
-            'ready',                  # J: status
+            'draft',                  # J: status (초안 - 검토 후 ready로 변경)
             scheduled_time            # K: scheduled_time
         ]
 

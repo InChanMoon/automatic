@@ -40,7 +40,8 @@ try:
         ComponentMarkerProcessor,
         get_horizontal_line_html,
         get_quotation_html,
-        get_table_html
+        get_table_html,
+        parse_table_marker
     )
     HAS_HTML_COMPONENTS = True
 except ImportError:
@@ -600,13 +601,23 @@ class NaverBlogPublisher:
                                     self.save_cookies()
                                     return {'success': True, 'protected': False, 'reason': ''}
                                 except:
-                                    # 여전히 로그인 페이지면 캡차 틀렸을 수 있음
+                                    # 여전히 로그인 페이지면 캡차 틀렸거나 보호조치
                                     if not self.detect_captcha():
-                                        # 캡차가 없으면 다른 문제
+                                        # 캡차가 없으면 보호조치 체크
+                                        protection = self.check_account_protection()
+                                        if protection['is_protected']:
+                                            self.log(f"캡차 풀이 후 보호조치 감지: {protection['reason']}")
+                                            return {'success': False, 'protected': True, 'reason': protection['reason']}
                                         break
                                     self.log("캡차 답이 틀린 것 같음, 재시도...")
                             else:
                                 break
+
+                        # 캡차 풀이 실패 후에도 보호조치 체크
+                        protection = self.check_account_protection()
+                        if protection['is_protected']:
+                            self.log(f"캡차 풀이 실패 후 보호조치 감지: {protection['reason']}")
+                            return {'success': False, 'protected': True, 'reason': protection['reason']}
 
                         self.log("캡차 풀이 실패")
                         return {'success': False, 'protected': False, 'reason': '캡차 풀이 실패'}
@@ -1350,12 +1361,15 @@ class NaverBlogPublisher:
                 quote_text = marker.get('data', '')
                 self._insert_quotation_via_button(quote_text, frame)
                 self._random_delay(0.2, 0.4)
-            elif marker_type in ('table', 'markdown_table'):
-                # 표는 아직 버튼 방식 미구현, 마커 텍스트로 대체
-                self.log(f"[!] 표 마커는 아직 미지원, 텍스트로 대체")
-                table_text = f"[표: {marker.get('data', '')}]"
-                self._input_text_block(table_text)
-                self._random_delay(0.1, 0.2)
+            elif marker_type == 'table':
+                # {table:...} 마커 처리
+                table_data = marker.get('data', '')
+                rows, cols, cell_data = parse_table_marker(table_data)
+                if cell_data:
+                    self._insert_table_via_button(cell_data, frame)
+                else:
+                    self.log(f"[!] 표 데이터 파싱 실패")
+                self._random_delay(0.2, 0.4)
 
             last_pos = marker['end']
 
@@ -1532,8 +1546,11 @@ class NaverBlogPublisher:
                 elif marker_type == 'quote':
                     quote_text = marker.get('data', '')
                     self._insert_quotation_via_button(quote_text, frame)
-                elif marker_type in ('table', 'markdown_table'):
-                    self.log(f"[!] 표 마커는 아직 미지원")
+                elif marker_type == 'table':
+                    table_data = marker.get('data', '')
+                    rows, cols, cell_data = parse_table_marker(table_data)
+                    if cell_data:
+                        self._insert_table_via_button(cell_data, frame)
                 self._random_delay(0.2, 0.4)
 
             last_pos = marker['end']
@@ -1614,8 +1631,11 @@ class NaverBlogPublisher:
                 elif marker_type == 'quote':
                     quote_text = marker.get('data', '')
                     self._insert_quotation_via_button(quote_text, frame)
-                elif marker_type in ('table', 'markdown_table'):
-                    self.log(f"[!] 표 마커는 아직 미지원")
+                elif marker_type == 'table':
+                    table_data = marker.get('data', '')
+                    rows, cols, cell_data = parse_table_marker(table_data)
+                    if cell_data:
+                        self._insert_table_via_button(cell_data, frame)
                 self._random_delay(0.2, 0.4)
 
             last_pos = marker['end']
@@ -1773,6 +1793,134 @@ class NaverBlogPublisher:
         except Exception as e:
             self.log(f"[X] 구분선 삽입 오류: {e}")
             return False
+
+    def _insert_table_via_button(self, cell_data: list, frame) -> bool:
+        """표를 HTML 클립보드 붙여넣기로 삽입
+
+        Args:
+            cell_data: 2D 리스트 [[행1셀1, 행1셀2], [행2셀1, 행2셀2], ...]
+            frame: iframe 프레임
+
+        Returns:
+            성공 여부
+        """
+        try:
+            if not cell_data:
+                self.log("[X] 표 데이터가 비어있음")
+                return False
+
+            rows = len(cell_data)
+            cols = max(len(row) for row in cell_data) if cell_data else 0
+
+            if rows == 0 or cols == 0:
+                self.log("[X] 표 크기가 유효하지 않음")
+                return False
+
+            # HTML 테이블 생성
+            table_html = self._build_table_html(cell_data, rows, cols)
+
+            # HTML 클립보드로 복사
+            try:
+                import win32clipboard
+                import struct
+
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+
+                # HTML 클립보드 포맷
+                CF_HTML = win32clipboard.RegisterClipboardFormat("HTML Format")
+
+                # HTML 클립보드 헤더 (바이트 오프셋 계산)
+                html_header = (
+                    "Version:0.9\r\n"
+                    "StartHTML:{:08d}\r\n"
+                    "EndHTML:{:08d}\r\n"
+                    "StartFragment:{:08d}\r\n"
+                    "EndFragment:{:08d}\r\n"
+                )
+
+                # Fragment markers
+                start_frag = "<!--StartFragment-->"
+                end_frag = "<!--EndFragment-->"
+
+                # Full HTML document
+                html_prefix = "<html><body>" + start_frag
+                html_suffix = end_frag + "</body></html>"
+
+                # Calculate offsets
+                dummy_header = html_header.format(0, 0, 0, 0)
+                header_len = len(dummy_header.encode('utf-8'))
+                prefix_len = len(html_prefix.encode('utf-8'))
+                table_len = len(table_html.encode('utf-8'))
+                suffix_len = len(html_suffix.encode('utf-8'))
+
+                start_html = header_len
+                start_fragment = header_len + prefix_len
+                end_fragment = start_fragment + table_len
+                end_html = end_fragment + suffix_len
+
+                # Final header with correct offsets
+                final_header = html_header.format(start_html, end_html, start_fragment, end_fragment)
+                full_html = final_header + html_prefix + table_html + html_suffix
+
+                # Set clipboard
+                win32clipboard.SetClipboardData(CF_HTML, full_html.encode('utf-8'))
+
+                # 일반 텍스트도 설정 (fallback)
+                text_table = self._build_text_table(cell_data)
+                win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, text_table)
+
+                win32clipboard.CloseClipboard()
+
+            except ImportError:
+                self.log("[!] win32clipboard 없음, pyperclip 사용")
+                import pyperclip
+                text_table = self._build_text_table(cell_data)
+                pyperclip.copy(text_table)
+
+            # Ctrl+V로 붙여넣기
+            self._random_delay(0.2, 0.4)
+            self.page.keyboard.press("Control+v")
+            self._random_delay(0.5, 0.8)
+
+            # 표 밖으로 이동
+            self.page.keyboard.press("Escape")
+            self._random_delay(0.2, 0.3)
+            self.page.keyboard.press("ArrowDown")
+            self._random_delay(0.1, 0.2)
+            self.page.keyboard.press("Enter")
+
+            self.log(f"[OK] 표 삽입 성공 ({rows}x{cols})")
+            return True
+
+        except Exception as e:
+            self.log(f"[X] 표 삽입 오류: {e}")
+            return False
+
+    def _build_table_html(self, cell_data: list, rows: int, cols: int) -> str:
+        """표 HTML 생성"""
+        html = '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">'
+
+        for row_idx, row in enumerate(cell_data):
+            html += '<tr>'
+            for col_idx in range(cols):
+                cell_text = row[col_idx] if col_idx < len(row) else ''
+                # 첫 행은 헤더로 처리
+                if row_idx == 0:
+                    html += f'<th style="background-color: #f5f5f5; padding: 8px;">{cell_text}</th>'
+                else:
+                    html += f'<td style="padding: 8px;">{cell_text}</td>'
+            html += '</tr>'
+
+        html += '</table>'
+        return html
+
+    def _build_text_table(self, cell_data: list) -> str:
+        """텍스트 표 생성 (fallback용)"""
+        lines = []
+        for row in cell_data:
+            lines.append('\t'.join(row))
+        return '\n'.join(lines)
 
     def _inject_html_component(self, html: str, description: str = "컴포넌트") -> bool:
         """HTML 컴포넌트를 에디터에 삽입 (JavaScript injection) - 레거시, 사용 안함

@@ -4,6 +4,8 @@ Gemini API 콘텐츠 생성기
 키워드 → 블로그 글 생성
 """
 
+import sys
+import os
 import json
 from google import genai
 from google.genai import types
@@ -11,16 +13,26 @@ from src.utils.content_parser import parse_title_and_content
 from src.utils.retry import retry_with_backoff
 
 
+def _get_resource_path(relative_path):
+    """PyInstaller EXE 호환 리소스 경로"""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath('.'), relative_path)
+
+
 class GeminiGenerator:
     """Gemini API 콘텐츠 생성 클래스"""
 
-    def __init__(self, config_path="config.json"):
+    def __init__(self, config_path=None):
         """
         초기화
 
         Args:
-            config_path: config.json 경로
+            config_path: config.json 경로 (None이면 자동 탐색)
         """
+        if config_path is None:
+            config_path = _get_resource_path('config.json')
+
         with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
 

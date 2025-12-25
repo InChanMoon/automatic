@@ -29,6 +29,7 @@ class ContentManagerV3(SheetsBase):
     COL_SCHEDULED_TIME = 10     # K: scheduled_time (예약발행 시간)
 
     # 상태값
+    STATUS_DRAFT = 'draft'           # 초안 (검토 필요)
     STATUS_READY = 'ready'           # 발행 대기
     STATUS_PUBLISHING = 'publishing' # 발행 중
     STATUS_PUBLISHED = 'published'   # 발행 완료

@@ -4,23 +4,38 @@ Google Sheets 기본 라이브러리
 모든 Sheets 작업의 기반이 되는 클래스
 """
 
+import sys
+import os
 import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from datetime import datetime
 
 
+def _get_resource_path(relative_path):
+    """PyInstaller EXE 호환 리소스 경로"""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath('.'), relative_path)
+
+
 class SheetsBase:
     """Google Sheets 기본 클래스"""
 
-    def __init__(self, config_path="config.json", credentials_path="credentials/google_service_account.json"):
+    def __init__(self, config_path=None, credentials_path=None):
         """
         초기화
 
         Args:
-            config_path: config.json 경로
-            credentials_path: Service Account JSON 경로
+            config_path: config.json 경로 (None이면 자동 탐색)
+            credentials_path: Service Account JSON 경로 (None이면 자동 탐색)
         """
+        # PyInstaller EXE 호환 경로 처리
+        if config_path is None:
+            config_path = _get_resource_path('config.json')
+        if credentials_path is None:
+            credentials_path = _get_resource_path('credentials/google_service_account.json')
+
         # Config 로드
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = json.load(f)

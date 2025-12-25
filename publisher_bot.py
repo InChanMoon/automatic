@@ -11,6 +11,9 @@ import random
 from datetime import datetime
 import os
 import uuid
+import json
+import keyboard
+import requests
 
 from src.sheets.content_manager_v3 import ContentManagerV3
 from src.sheets.account_manager import AccountManager
@@ -89,6 +92,17 @@ class PublisherBot:
         # 헤드리스 옵션
         self.headless_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(top, text="헤드리스", variable=self.headless_var).pack(side='left', padx=6)
+
+        # IP 변경 설정
+        self.ip_change_enabled = tk.BooleanVar(value=False)
+        self.ip_hotkey = tk.StringVar(value="")
+        self.ip_wait_time = tk.IntVar(value=3)
+        self.load_ip_settings()
+
+        ttk.Checkbutton(top, text="IP변경", variable=self.ip_change_enabled).pack(side='left')
+        tk.Button(top, text="⚙", command=self.open_ip_settings,
+                 bg=Theme.COLOR_GRAY, fg='white', font=Theme.FONT_TINY,
+                 relief='flat', padx=4, pady=1).pack(side='left', padx=1)
 
         # 상태 표시
         self.status_label = tk.Label(top, text="대기중", bg=Theme.BG_MAIN, fg=Theme.FG_TEXT_LIGHT,
@@ -301,80 +315,66 @@ class PublisherBot:
         dlg.configure(bg='white')
         dlg.transient(self.root)
         dlg.grab_set()
-
-        # 메인 창 중앙에 위치
-        dlg.update_idletasks()
-        w, h = 280, 290
-        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
-        dlg.geometry(f"{w}x{h}+{x}+{y}")
+        dlg.resizable(False, False)
 
         setting = self.settings_mgr.get_setting(group_name)
         if not setting:
             dlg.destroy()
             return
 
-        f = tk.Frame(dlg, bg='white', padx=10, pady=8)
+        f = tk.Frame(dlg, bg='white', padx=10, pady=6)
         f.pack(fill='both', expand=True)
 
         # 계정 선택
         acc_frame = tk.Frame(f, bg='white')
-        acc_frame.pack(fill='x', pady=2)
-        tk.Label(acc_frame, text="계정:", bg='white', width=10, anchor='w', font=('맑은 고딕', 8)).pack(side='left')
-
+        acc_frame.pack(fill='x', pady=1)
+        tk.Label(acc_frame, text="계정:", bg='white', width=8, anchor='w', font=('맑은 고딕', 8)).pack(side='left')
         accounts = self.account_mgr.get_accounts_by_group(group_name)
         acc_ids = [a['account_id'] for a in accounts]
-        acc_var = tk.StringVar(value=setting['account'] or (acc_ids[0] if acc_ids else ''))
+        acc_var = tk.StringVar(value=setting.get('account') or (acc_ids[0] if acc_ids else ''))
         ttk.Combobox(acc_frame, textvariable=acc_var, values=acc_ids, width=14, font=('맑은 고딕', 8)).pack(side='left')
 
         # 계정당 발행수
         ppa_frame = tk.Frame(f, bg='white')
-        ppa_frame.pack(fill='x', pady=2)
-        tk.Label(ppa_frame, text="계정당발행:", bg='white', width=10, anchor='w', font=('맑은 고딕', 8)).pack(side='left')
-        ppa_var = tk.StringVar(value=str(setting['posts_per_account']))
-        tk.Spinbox(ppa_frame, from_=1, to=999, width=6, textvariable=ppa_var,
+        ppa_frame.pack(fill='x', pady=1)
+        tk.Label(ppa_frame, text="계정당:", bg='white', width=8, anchor='w', font=('맑은 고딕', 8)).pack(side='left')
+        ppa_var = tk.StringVar(value=str(setting.get('posts_per_account', 5)))
+        tk.Spinbox(ppa_frame, from_=1, to=999, width=5, textvariable=ppa_var,
                   font=('맑은 고딕', 8), justify='center').pack(side='left')
 
-        # 현재 발행수
+        # 현재발행 + 리셋
         cur_frame = tk.Frame(f, bg='white')
-        cur_frame.pack(fill='x', pady=2)
-        tk.Label(cur_frame, text="현재발행:", bg='white', width=10, anchor='w', font=('맑은 고딕', 8)).pack(side='left')
-        tk.Label(cur_frame, text=f"{setting['account_post_count']}개",
-                bg='white', font=('맑은 고딕', 8)).pack(side='left')
+        cur_frame.pack(fill='x', pady=1)
+        tk.Label(cur_frame, text="현재:", bg='white', width=8, anchor='w', font=('맑은 고딕', 8)).pack(side='left')
+        tk.Label(cur_frame, text=f"{setting.get('account_post_count', 0)}개", bg='white', font=('맑은 고딕', 8), width=4).pack(side='left')
+        tk.Button(cur_frame, text="리셋", command=lambda: self._reset_account(group_name, dlg),
+                 bg='#607D8B', fg='white', font=('맑은 고딕', 7), relief='flat', padx=3).pack(side='left', padx=2)
 
-        # 오늘발행
+        # 오늘발행 + 리셋
         today_frame = tk.Frame(f, bg='white')
-        today_frame.pack(fill='x', pady=2)
-        tk.Label(today_frame, text="오늘발행:", bg='white', width=10, anchor='w', font=('맑은 고딕', 8)).pack(side='left')
-        tk.Label(today_frame, text=f"{setting['today_count']}개", bg='white', font=('맑은 고딕', 8)).pack(side='left')
+        today_frame.pack(fill='x', pady=1)
+        tk.Label(today_frame, text="오늘:", bg='white', width=8, anchor='w', font=('맑은 고딕', 8)).pack(side='left')
+        tk.Label(today_frame, text=f"{setting.get('today_count', 0)}개", bg='white', font=('맑은 고딕', 8), width=4).pack(side='left')
+        tk.Button(today_frame, text="리셋", command=lambda: self._reset_today(group_name, dlg),
+                 bg='#9C27B0', fg='white', font=('맑은 고딕', 7), relief='flat', padx=3).pack(side='left', padx=2)
 
         # 잠금상태
         lock_frame = tk.Frame(f, bg='white')
-        lock_frame.pack(fill='x', pady=2)
-        tk.Label(lock_frame, text="잠금:", bg='white', width=10, anchor='w', font=('맑은 고딕', 8)).pack(side='left')
+        lock_frame.pack(fill='x', pady=1)
+        tk.Label(lock_frame, text="잠금:", bg='white', width=8, anchor='w', font=('맑은 고딕', 8)).pack(side='left')
         locked, locker = self.settings_mgr.is_locked(group_name)
         if locked:
             tk.Label(lock_frame, text=f"잠금({locker[:6]})", bg='white', fg='#f44336', font=('맑은 고딕', 8)).pack(side='left')
             tk.Button(lock_frame, text="해제", command=lambda: self._release_and_reload(group_name, dlg),
-                     bg='#FF9800', fg='white', font=('맑은 고딕', 7), relief='flat', padx=4).pack(side='left', padx=3)
+                     bg='#FF9800', fg='white', font=('맑은 고딕', 7), relief='flat', padx=3).pack(side='left', padx=2)
         else:
             tk.Label(lock_frame, text="사용가능", bg='white', fg='#4CAF50', font=('맑은 고딕', 8)).pack(side='left')
 
-        tk.Frame(f, bg='#ddd', height=1).pack(fill='x', pady=5)
-
-        # 리셋 버튼들
-        reset_frame = tk.Frame(f, bg='white')
-        reset_frame.pack(fill='x', pady=2)
-        tk.Button(reset_frame, text="오늘발행 리셋", command=lambda: self._reset_today(group_name, dlg),
-                 bg='#9C27B0', fg='white', font=('맑은 고딕', 7), relief='flat', padx=4).pack(side='left')
-        tk.Button(reset_frame, text="계정발행 리셋", command=lambda: self._reset_account(group_name, dlg),
-                 bg='#607D8B', fg='white', font=('맑은 고딕', 7), relief='flat', padx=4).pack(side='left', padx=3)
-
-        tk.Frame(f, bg='#ddd', height=1).pack(fill='x', pady=5)
+        tk.Frame(f, bg='#ddd', height=1).pack(fill='x', pady=4)
 
         # 저장/닫기 버튼
         btn_frame = tk.Frame(f, bg='white')
-        btn_frame.pack()
+        btn_frame.pack(pady=2)
 
         def save():
             try:
@@ -392,6 +392,18 @@ class PublisherBot:
                  font=('맑은 고딕', 8), relief='flat', padx=10).pack(side='left', padx=2)
         tk.Button(btn_frame, text="닫기", command=dlg.destroy, bg='#666', fg='white',
                  font=('맑은 고딕', 8), relief='flat', padx=10).pack(side='left', padx=2)
+
+        # 다이얼로그 크기 자동 조절 후 메인 창 중앙 배치
+        dlg.update_idletasks()
+        dlg_w = dlg.winfo_reqwidth()
+        dlg_h = dlg.winfo_reqheight()
+        main_x = self.root.winfo_x()
+        main_y = self.root.winfo_y()
+        main_w = self.root.winfo_width()
+        main_h = self.root.winfo_height()
+        x = main_x + (main_w - dlg_w) // 2
+        y = main_y + (main_h - dlg_h) // 2
+        dlg.geometry(f"{dlg_w}x{dlg_h}+{x}+{y}")
 
     def _release_and_reload(self, grp, dlg):
         self.settings_mgr.force_release_lock(grp)
@@ -428,7 +440,9 @@ class PublisherBot:
         self.engine = PublisherEngine(
             bot_id=self.bot_id,
             headless=self.headless_var.get(),
-            image_mgr=self.image_mgr
+            image_mgr=self.image_mgr,
+            ip_change_callback=self.change_ip,
+            ip_change_enabled=self.ip_change_enabled.get()
         )
         self.engine.set_log_callback(self.log)
 
@@ -459,6 +473,161 @@ class PublisherBot:
         self.stop_btn.config(state='disabled')
         self.status_label.config(text="대기중", fg=Theme.FG_TEXT_LIGHT)
         self.log("중지됨", 'warning')
+
+    # ==================== IP 변경 관련 ====================
+
+    def load_ip_settings(self):
+        """IP 설정 로드"""
+        config_path = os.path.join(os.path.dirname(__file__), 'ip_settings.json')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.ip_hotkey.set(data.get('hotkey', ''))
+                    self.ip_wait_time.set(data.get('wait_time', 3))
+                    self.ip_change_enabled.set(data.get('enabled', False))
+            except:
+                pass
+
+    def save_ip_settings(self):
+        """IP 설정 저장"""
+        config_path = os.path.join(os.path.dirname(__file__), 'ip_settings.json')
+        data = {
+            'hotkey': self.ip_hotkey.get(),
+            'wait_time': self.ip_wait_time.get(),
+            'enabled': self.ip_change_enabled.get()
+        }
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def get_current_ip(self) -> str:
+        """현재 IP 조회"""
+        try:
+            resp = requests.get('https://api.ip.pe.kr/', timeout=10)
+            return resp.text.strip()
+        except Exception as e:
+            self.log(f"IP 조회 실패: {e}", 'error')
+            return ""
+
+    def change_ip(self) -> bool:
+        """IP 변경 실행 (핫키 전송 → 대기 → 변경 확인)"""
+        hotkey = self.ip_hotkey.get()
+        if not hotkey:
+            self.log("IP 핫키가 설정되지 않음", 'warning')
+            return False
+
+        # 변경 전 IP
+        old_ip = self.get_current_ip()
+        if not old_ip:
+            return False
+        self.log(f"현재 IP: {old_ip}", 'info')
+
+        # 핫키 전송
+        try:
+            keyboard.send(hotkey)
+            self.log(f"IP 변경 핫키 전송: {hotkey}", 'info')
+        except Exception as e:
+            self.log(f"핫키 전송 실패: {e}", 'error')
+            return False
+
+        # 대기 (1초 간격으로 체크, 변경되면 즉시 종료)
+        wait = self.ip_wait_time.get()
+        self.log(f"IP 변경 대기 중... (최대 {wait}초)", 'info')
+
+        new_ip = old_ip
+        for i in range(wait):
+            time.sleep(1)
+            new_ip = self.get_current_ip()
+            if new_ip and new_ip != old_ip:
+                self.log(f"IP 변경 성공: {old_ip} → {new_ip} ({i+1}초)", 'success')
+                return True
+
+        self.log(f"IP 변경 안됨 (동일: {new_ip})", 'warning')
+        return False
+
+    def open_ip_settings(self):
+        """IP 설정 다이얼로그"""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("IP 변경 설정")
+        dlg.configure(bg='white')
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+
+        f = tk.Frame(dlg, bg='white', padx=15, pady=10)
+        f.pack(fill='both', expand=True)
+
+        # 핫키 설정
+        hk_frame = tk.Frame(f, bg='white')
+        hk_frame.pack(fill='x', pady=3)
+        tk.Label(hk_frame, text="핫키:", bg='white', width=10, anchor='w', font=('맑은 고딕', 9)).pack(side='left')
+        hk_entry = tk.Entry(hk_frame, textvariable=self.ip_hotkey, width=20, font=('맑은 고딕', 9))
+        hk_entry.pack(side='left')
+        tk.Label(hk_frame, text="(예: ctrl+shift+f5)", bg='white', fg='#888', font=('맑은 고딕', 8)).pack(side='left', padx=5)
+
+        # 대기 시간
+        wait_frame = tk.Frame(f, bg='white')
+        wait_frame.pack(fill='x', pady=3)
+        tk.Label(wait_frame, text="대기시간:", bg='white', width=10, anchor='w', font=('맑은 고딕', 9)).pack(side='left')
+        tk.Spinbox(wait_frame, from_=1, to=30, width=5, textvariable=self.ip_wait_time,
+                  font=('맑은 고딕', 9), justify='center').pack(side='left')
+        tk.Label(wait_frame, text="초", bg='white', font=('맑은 고딕', 9)).pack(side='left', padx=3)
+
+        # 현재 IP 표시
+        ip_frame = tk.Frame(f, bg='white')
+        ip_frame.pack(fill='x', pady=3)
+        tk.Label(ip_frame, text="현재 IP:", bg='white', width=10, anchor='w', font=('맑은 고딕', 9)).pack(side='left')
+        ip_label = tk.Label(ip_frame, text="조회 중...", bg='white', fg='#2196F3', font=('맑은 고딕', 9))
+        ip_label.pack(side='left')
+
+        def refresh_ip():
+            ip_label.config(text="조회 중...")
+            def do_refresh():
+                ip = self.get_current_ip()
+                dlg.after(0, lambda: ip_label.config(text=ip or "조회 실패"))
+            threading.Thread(target=do_refresh, daemon=True).start()
+
+        tk.Button(ip_frame, text="새로고침", command=refresh_ip,
+                 bg='#2196F3', fg='white', font=('맑은 고딕', 7), relief='flat', padx=4).pack(side='left', padx=5)
+
+        refresh_ip()
+
+        tk.Frame(f, bg='#ddd', height=1).pack(fill='x', pady=8)
+
+        # 버튼
+        btn_frame = tk.Frame(f, bg='white')
+        btn_frame.pack(pady=3)
+
+        def test_change():
+            """IP 변경 테스트"""
+            def do_test():
+                result = self.change_ip()
+                dlg.after(0, refresh_ip)
+                if result:
+                    dlg.after(0, lambda: messagebox.showinfo("성공", "IP가 변경되었습니다"))
+                else:
+                    dlg.after(0, lambda: messagebox.showwarning("실패", "IP 변경에 실패했습니다"))
+            threading.Thread(target=do_test, daemon=True).start()
+
+        def save_and_close():
+            self.save_ip_settings()
+            self.log("IP 설정 저장됨", 'success')
+            dlg.destroy()
+
+        tk.Button(btn_frame, text="테스트", command=test_change,
+                 bg='#FF9800', fg='white', font=('맑은 고딕', 9), relief='flat', padx=10).pack(side='left', padx=3)
+        tk.Button(btn_frame, text="저장", command=save_and_close,
+                 bg='#4CAF50', fg='white', font=('맑은 고딕', 9), relief='flat', padx=10).pack(side='left', padx=3)
+        tk.Button(btn_frame, text="닫기", command=dlg.destroy,
+                 bg='#666', fg='white', font=('맑은 고딕', 9), relief='flat', padx=10).pack(side='left', padx=3)
+
+        # 다이얼로그 중앙 배치
+        dlg.update_idletasks()
+        dlg_w = dlg.winfo_reqwidth()
+        dlg_h = dlg.winfo_reqheight()
+        x = self.root.winfo_x() + (self.root.winfo_width() - dlg_w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dlg_h) // 2
+        dlg.geometry(f"{dlg_w}x{dlg_h}+{x}+{y}")
 
     def open_captcha_accounts(self):
         """캡차 필요 계정 관리 다이얼로그"""

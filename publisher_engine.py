@@ -23,7 +23,8 @@ from src.publisher.naver_blog_publisher import NaverBlogPublisher
 class PublisherEngine:
     """발행 엔진 - API 호출 최소화"""
 
-    def __init__(self, bot_id: str, headless: bool = False, image_mgr=None):
+    def __init__(self, bot_id: str, headless: bool = False, image_mgr=None,
+                 ip_change_callback: Callable[[], bool] = None, ip_change_enabled: bool = False):
         """
         초기화
 
@@ -31,10 +32,14 @@ class PublisherEngine:
             bot_id: 봇 고유 ID (동시성 제어용)
             headless: 헤드리스 모드
             image_mgr: DriveImageManager 인스턴스 (선택)
+            ip_change_callback: IP 변경 콜백 함수 (선택)
+            ip_change_enabled: IP 변경 활성화 여부
         """
         self.bot_id = bot_id
         self.headless = headless
         self.image_mgr = image_mgr
+        self.ip_change_callback = ip_change_callback
+        self.ip_change_enabled = ip_change_enabled
 
         # 매니저 초기화
         self.content_mgr = ContentManagerV3()
@@ -47,6 +52,9 @@ class PublisherEngine:
 
         # 현재 실행 중인 publisher (즉시 중지용)
         self._current_publisher: Optional[NaverBlogPublisher] = None
+
+        # 현재 사용 중인 계정 (IP 변경 판단용)
+        self._current_account_id: Optional[str] = None
 
         # 로그 콜백
         self.log_callback: Optional[Callable[[str, str], None]] = None
@@ -76,6 +84,28 @@ class PublisherEngine:
             self.log_callback(display_msg, level)
         else:
             print(f"[{level.upper()}] {display_msg}")
+
+    def _change_ip_if_account_changed(self, new_account_id: str) -> bool:
+        """계정이 변경되었으면 IP 변경 실행
+
+        Args:
+            new_account_id: 새로 사용할 계정 ID
+
+        Returns:
+            bool: IP 변경 성공 여부 (비활성화 또는 동일 계정이면 True)
+        """
+        if not self.ip_change_enabled or not self.ip_change_callback:
+            return True
+
+        # 첫 계정이거나 계정이 바뀌었으면 IP 변경
+        if self._current_account_id is None or self._current_account_id != new_account_id:
+            old_acc = self._current_account_id or '(없음)'
+            self.log(f"계정 변경 감지: {old_acc} → {new_account_id}, IP 변경 실행...", 'info')
+            result = self.ip_change_callback()
+            self._current_account_id = new_account_id
+            return result
+
+        return True
 
     def stop(self):
         """중지 요청 - 즉시 브라우저 종료"""
@@ -220,6 +250,9 @@ class PublisherEngine:
                     if kw:
                         self.image_mgr.set_group(grp)
                         images = self.image_mgr.get_images_for_post(kw, cnt)
+
+            # 계정 변경 시 IP 변경 (브라우저 시작 전)
+            self._change_ip_if_account_changed(acc['account_id'])
 
             # 브라우저 시작
             pub = NaverBlogPublisher(headless=self.headless)
@@ -395,6 +428,7 @@ class PublisherEngine:
                                     self._cache['settings'][grp]['account'] = next_acc_id
                                     self._cache['settings'][grp]['account_post_count'] = 0
                                     self.log(f"[{grp}] 계정전환: {next_acc_id}", 'warning')
+                                    # IP 변경은 publish_single에서 자동 처리됨
                                     self._wait(12)
                                 except Exception as e:
                                     self.log(f"[{grp}] 계정전환 오류: {e}", 'warning')
