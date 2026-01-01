@@ -359,7 +359,7 @@ class PublisherEngine:
 
     def run(self, groups: List[str], on_stats_update: Callable = None, on_refresh: Callable = None):
         """
-        발행 루프 실행
+        발행 루프 실행 - 그룹 순차 처리 (한 그룹 완료 후 다음 그룹)
 
         Args:
             groups: 발행할 그룹 목록
@@ -378,22 +378,27 @@ class PublisherEngine:
         consecutive_network_errors = 0
 
         try:
-            while not self.stop_requested:
-                published = False
-                had_network_error = False
+            # 그룹 순차 처리 (한 그룹 완료 후 다음 그룹)
+            for grp in groups:
+                if self.stop_requested:
+                    break
 
-                for grp in groups:
-                    if self.stop_requested:
-                        break
+                self.log(f"=== [{grp}] 그룹 발행 시작 ===", 'success')
+
+                # 이 그룹의 모든 콘텐츠 발행 완료될 때까지 반복
+                while not self.stop_requested:
+                    had_network_error = False
 
                     # 잠금 획득 시도
                     try:
                         if not self.settings_mgr.acquire_lock(grp, self.bot_id):
                             self.log(f"[{grp}] 다른 봇이 사용 중 (잠금 대기)", 'info')
+                            self._wait(5)
                             continue
                     except Exception as e:
                         self.log(f"[{grp}] 잠금 획득 오류: {e}", 'warning')
                         had_network_error = True
+                        self._wait(3)
                         continue
 
                     try:
@@ -401,7 +406,7 @@ class PublisherEngine:
                         setting = self._get_setting_cached(grp)
                         if not setting:
                             self.log(f"[{grp}] 설정 없음", 'warning')
-                            continue
+                            break  # 다음 그룹으로
 
                         # 계정당 발행 수 체크
                         posts_per_account = setting.get('posts_per_account', 5)
@@ -461,7 +466,7 @@ class PublisherEngine:
 
                         if not acc:
                             self.log(f"[{grp}] 사용 가능한 계정 없음", 'warning')
-                            continue
+                            break  # 다음 그룹으로
 
                         # 콘텐츠 확인
                         try:
@@ -469,11 +474,16 @@ class PublisherEngine:
                         except Exception as e:
                             self.log(f"[{grp}] 콘텐츠 조회 오류: {e}", 'warning')
                             had_network_error = True
+                            consecutive_network_errors += 1
+                            if consecutive_network_errors >= 3:
+                                self._refresh_cache(groups)
+                                consecutive_network_errors = 0
+                            self._wait(3)
                             continue
 
                         if not contents:
-                            self.log(f"[{grp}] 발행대기 콘텐츠 없음", 'info')
-                            continue
+                            self.log(f"[{grp}] 발행대기 콘텐츠 없음 - 다음 그룹으로", 'info')
+                            break  # 다음 그룹으로
 
                         content = contents[0]
                         total_contents = len(contents)
@@ -483,7 +493,6 @@ class PublisherEngine:
                         result = self.publish_single(grp, acc, content)
 
                         if result['success']:
-                            published = True
                             self.stats['published'] += 1
                             consecutive_network_errors = 0
 
@@ -523,6 +532,7 @@ class PublisherEngine:
                                     self.content_mgr.release_publishing_lock(content['sheet_name'], content['row_num'])
                                 except:
                                     pass
+                                # 보호조치 후 다음 계정으로 계속 시도
                             else:
                                 self.stats['failed'] += 1
 
@@ -537,6 +547,11 @@ class PublisherEngine:
                     except Exception as e:
                         self.log(f"[{grp}] 루프 오류: {e}", 'error')
                         had_network_error = True
+                        consecutive_network_errors += 1
+                        if consecutive_network_errors >= 3:
+                            self._refresh_cache(groups)
+                            consecutive_network_errors = 0
+                        self._wait(3)
 
                     finally:
                         try:
@@ -544,22 +559,13 @@ class PublisherEngine:
                         except:
                             pass
 
-                # 대기 로직
+                # 그룹 완료 로그
                 if not self.stop_requested:
-                    if had_network_error:
-                        consecutive_network_errors += 1
-                        wait_time = min(3 * consecutive_network_errors, 12)  # 최대 12초
-                        self.log(f"네트워크 오류 발생, {wait_time}초 대기...", 'warning')
-                        self._wait(wait_time)
+                    self.log(f"=== [{grp}] 그룹 발행 완료 ===", 'success')
 
-                        # 캐시 갱신 시도
-                        if consecutive_network_errors >= 3:
-                            self._refresh_cache(groups)
-                            consecutive_network_errors = 0
-                    elif not published:
-                        self.log("대기중... (12초)")
-                        self._wait(12)
-                    # published=True면 이미 발행 후 대기했으므로 추가 대기 없음
+            # 모든 그룹 완료
+            if not self.stop_requested:
+                self.log("모든 그룹 발행 완료!", 'success')
 
         finally:
             self.log("발행 엔진 종료", 'warning')
