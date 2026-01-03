@@ -378,194 +378,198 @@ class PublisherEngine:
         consecutive_network_errors = 0
 
         try:
-            # 그룹 순차 처리 (한 그룹 완료 후 다음 그룹)
-            for grp in groups:
-                if self.stop_requested:
-                    break
+            # 무한 루프 - 중지 요청 전까지 계속 실행
+            while not self.stop_requested:
+                published_any = False
 
-                self.log(f"=== [{grp}] 그룹 발행 시작 ===", 'success')
+                # 그룹 순차 처리 (한 그룹 완료 후 다음 그룹)
+                for grp in groups:
+                    if self.stop_requested:
+                        break
 
-                # 이 그룹의 모든 콘텐츠 발행 완료될 때까지 반복
-                while not self.stop_requested:
-                    had_network_error = False
+                    # 이 그룹의 모든 콘텐츠 발행 완료될 때까지 반복
+                    group_has_content = True
+                    while group_has_content and not self.stop_requested:
+                        had_network_error = False
 
-                    # 잠금 획득 시도
-                    try:
-                        if not self.settings_mgr.acquire_lock(grp, self.bot_id):
-                            self.log(f"[{grp}] 다른 봇이 사용 중 (잠금 대기)", 'info')
-                            self._wait(5)
-                            continue
-                    except Exception as e:
-                        self.log(f"[{grp}] 잠금 획득 오류: {e}", 'warning')
-                        had_network_error = True
-                        self._wait(3)
-                        continue
-
-                    try:
-                        # 설정 가져오기 (캐시 활용)
-                        setting = self._get_setting_cached(grp)
-                        if not setting:
-                            self.log(f"[{grp}] 설정 없음", 'warning')
-                            break  # 다음 그룹으로
-
-                        # 계정당 발행 수 체크
-                        posts_per_account = setting.get('posts_per_account', 5)
-                        account_post_count = setting.get('account_post_count', 0)
-                        current_acc_id = setting.get('account', '')
-
-                        # 계정 전환 필요 체크
-                        if account_post_count >= posts_per_account and current_acc_id:
-                            self.log(f"[{grp}] 계정당 발행수 도달 ({account_post_count}/{posts_per_account})", 'warning')
-
-                            # 다음 계정 선택
-                            accounts = self._get_accounts_cached(grp)
-                            acc_ids = [a['account_id'] for a in accounts]
-
-                            if current_acc_id in acc_ids:
-                                idx = acc_ids.index(current_acc_id)
-                                next_acc_id = acc_ids[(idx + 1) % len(acc_ids)]
-                            else:
-                                next_acc_id = acc_ids[0] if acc_ids else None
-
-                            if next_acc_id:
-                                try:
-                                    self.settings_mgr.switch_to_next_account(grp, next_acc_id)
-                                    self._cache['settings'][grp]['account'] = next_acc_id
-                                    self._cache['settings'][grp]['account_post_count'] = 0
-                                    self.log(f"[{grp}] 계정전환: {next_acc_id}", 'warning')
-                                    # IP 변경은 publish_single에서 자동 처리됨
-                                    self._wait(12)
-                                except Exception as e:
-                                    self.log(f"[{grp}] 계정전환 오류: {e}", 'warning')
-                                    had_network_error = True
-
-                        # 현재 계정 정보 가져오기
-                        acc_id = self._cache['settings'].get(grp, {}).get('account', '') or current_acc_id
-                        acc = None
-
-                        if acc_id:
-                            accounts = self._get_accounts_cached(grp)
-                            for a in accounts:
-                                if a['account_id'] == acc_id and a.get('status') == 'active':
-                                    acc = a
-                                    break
-
-                        # 계정 없으면 새로 찾기
-                        if not acc:
-                            acc = self._get_available_account(grp)
-                            if acc:
-                                acc_id = acc['account_id']
-                                try:
-                                    # 새 계정 선택 시 account_post_count도 0으로 초기화
-                                    self.settings_mgr.update_setting(grp, account=acc_id, account_post_count=0)
-                                    self._cache['settings'][grp]['account'] = acc_id
-                                    self._cache['settings'][grp]['account_post_count'] = 0
-                                    self.log(f"[{grp}] 계정 선택: {acc_id}", 'warning')
-                                except Exception as e:
-                                    self.log(f"[{grp}] 계정 설정 오류: {e}", 'warning')
-
-                        if not acc:
-                            self.log(f"[{grp}] 사용 가능한 계정 없음", 'warning')
-                            break  # 다음 그룹으로
-
-                        # 콘텐츠 확인
+                        # 잠금 획득 시도
                         try:
-                            contents = self.content_mgr.get_ready_contents_by_group(grp)
+                            if not self.settings_mgr.acquire_lock(grp, self.bot_id):
+                                self.log(f"[{grp}] 다른 봇이 사용 중 (잠금 대기)", 'info')
+                                self._wait(5)
+                                continue
                         except Exception as e:
-                            self.log(f"[{grp}] 콘텐츠 조회 오류: {e}", 'warning')
+                            self.log(f"[{grp}] 잠금 획득 오류: {e}", 'warning')
+                            had_network_error = True
+                            self._wait(3)
+                            continue
+
+                        try:
+                            # 설정 가져오기 (캐시 활용)
+                            setting = self._get_setting_cached(grp)
+                            if not setting:
+                                self.log(f"[{grp}] 설정 없음", 'warning')
+                                group_has_content = False
+                                break
+
+                            # 계정당 발행 수 체크
+                            posts_per_account = setting.get('posts_per_account', 5)
+                            account_post_count = setting.get('account_post_count', 0)
+                            current_acc_id = setting.get('account', '')
+
+                            # 계정 전환 필요 체크
+                            if account_post_count >= posts_per_account and current_acc_id:
+                                self.log(f"[{grp}] 계정당 발행수 도달 ({account_post_count}/{posts_per_account})", 'warning')
+
+                                # 다음 계정 선택
+                                accounts = self._get_accounts_cached(grp)
+                                acc_ids = [a['account_id'] for a in accounts]
+
+                                if current_acc_id in acc_ids:
+                                    idx = acc_ids.index(current_acc_id)
+                                    next_acc_id = acc_ids[(idx + 1) % len(acc_ids)]
+                                else:
+                                    next_acc_id = acc_ids[0] if acc_ids else None
+
+                                if next_acc_id:
+                                    try:
+                                        self.settings_mgr.switch_to_next_account(grp, next_acc_id)
+                                        self._cache['settings'][grp]['account'] = next_acc_id
+                                        self._cache['settings'][grp]['account_post_count'] = 0
+                                        self.log(f"[{grp}] 계정전환: {next_acc_id}", 'warning')
+                                        # IP 변경은 publish_single에서 자동 처리됨
+                                        self._wait(12)
+                                    except Exception as e:
+                                        self.log(f"[{grp}] 계정전환 오류: {e}", 'warning')
+                                        had_network_error = True
+
+                            # 현재 계정 정보 가져오기
+                            acc_id = self._cache['settings'].get(grp, {}).get('account', '') or current_acc_id
+                            acc = None
+
+                            if acc_id:
+                                accounts = self._get_accounts_cached(grp)
+                                for a in accounts:
+                                    if a['account_id'] == acc_id and a.get('status') == 'active':
+                                        acc = a
+                                        break
+
+                            # 계정 없으면 새로 찾기
+                            if not acc:
+                                acc = self._get_available_account(grp)
+                                if acc:
+                                    acc_id = acc['account_id']
+                                    try:
+                                        # 새 계정 선택 시 account_post_count도 0으로 초기화
+                                        self.settings_mgr.update_setting(grp, account=acc_id, account_post_count=0)
+                                        self._cache['settings'][grp]['account'] = acc_id
+                                        self._cache['settings'][grp]['account_post_count'] = 0
+                                        self.log(f"[{grp}] 계정 선택: {acc_id}", 'warning')
+                                    except Exception as e:
+                                        self.log(f"[{grp}] 계정 설정 오류: {e}", 'warning')
+
+                            if not acc:
+                                self.log(f"[{grp}] 사용 가능한 계정 없음", 'warning')
+                                group_has_content = False
+                                break
+
+                            # 콘텐츠 확인
+                            try:
+                                contents = self.content_mgr.get_ready_contents_by_group(grp)
+                            except Exception as e:
+                                self.log(f"[{grp}] 콘텐츠 조회 오류: {e}", 'warning')
+                                had_network_error = True
+                                consecutive_network_errors += 1
+                                if consecutive_network_errors >= 3:
+                                    self._refresh_cache(groups)
+                                    consecutive_network_errors = 0
+                                self._wait(3)
+                                continue
+
+                            if not contents:
+                                group_has_content = False
+                                break
+
+                            content = contents[0]
+                            total_contents = len(contents)
+
+                            # 발행 실행 (진행률 표시 개선)
+                            self.log(f"[{grp}] 발행 시작 [1/{total_contents}]: {content['title'][:25]}...", 'info')
+                            result = self.publish_single(grp, acc, content)
+
+                            if result['success']:
+                                self.stats['published'] += 1
+                                consecutive_network_errors = 0
+                                published_any = True
+
+                                # 캐시 업데이트
+                                if grp in self._cache['settings']:
+                                    self._cache['settings'][grp]['account_post_count'] = \
+                                        self._cache['settings'][grp].get('account_post_count', 0) + 1
+
+                                if not self.stop_requested:
+                                    wait = random.randint(3, 8)
+                                    self.log(f"{wait}초 대기...")
+                                    self._wait(wait)
+                            else:
+                                if result.get('protected'):
+                                    # 보호조치: 계정 suspended 처리
+                                    try:
+                                        self.account_mgr.update_status(grp, acc['account_id'], 'suspended')
+                                    except:
+                                        pass
+
+                                    # 쿠키 삭제
+                                    cookie_path = f"cookies/{acc['account_id']}_cookies.json"
+                                    if os.path.exists(cookie_path):
+                                        os.remove(cookie_path)
+
+                                    # 계정 초기화
+                                    try:
+                                        self.settings_mgr.update_setting(grp, account='')
+                                        self._cache['settings'][grp]['account'] = ''
+                                    except:
+                                        pass
+
+                                    self.log(f"[{grp}] {acc['account_id']} 보호조치 -> suspended", 'error')
+
+                                    # 콘텐츠는 ready로 복원
+                                    try:
+                                        self.content_mgr.release_publishing_lock(content['sheet_name'], content['row_num'])
+                                    except:
+                                        pass
+                                    # 보호조치 후 다음 계정으로 계속 시도
+                                else:
+                                    self.stats['failed'] += 1
+
+                            # 통계 업데이트 콜백
+                            if on_stats_update:
+                                on_stats_update(self.stats['published'], self.stats['failed'])
+
+                            # 새로고침 콜백
+                            if on_refresh:
+                                on_refresh()
+
+                        except Exception as e:
+                            self.log(f"[{grp}] 루프 오류: {e}", 'error')
                             had_network_error = True
                             consecutive_network_errors += 1
                             if consecutive_network_errors >= 3:
                                 self._refresh_cache(groups)
                                 consecutive_network_errors = 0
                             self._wait(3)
-                            continue
 
-                        if not contents:
-                            self.log(f"[{grp}] 발행대기 콘텐츠 없음 - 다음 그룹으로", 'info')
-                            break  # 다음 그룹으로
+                        finally:
+                            try:
+                                self.settings_mgr.release_lock(grp, self.bot_id)
+                            except:
+                                pass
 
-                        content = contents[0]
-                        total_contents = len(contents)
-
-                        # 발행 실행 (진행률 표시 개선)
-                        self.log(f"[{grp}] 발행 시작 [1/{total_contents}]: {content['title'][:25]}...", 'info')
-                        result = self.publish_single(grp, acc, content)
-
-                        if result['success']:
-                            self.stats['published'] += 1
-                            consecutive_network_errors = 0
-
-                            # 캐시 업데이트
-                            if grp in self._cache['settings']:
-                                self._cache['settings'][grp]['account_post_count'] = \
-                                    self._cache['settings'][grp].get('account_post_count', 0) + 1
-
-                            if not self.stop_requested:
-                                wait = random.randint(3, 8)
-                                self.log(f"{wait}초 대기...")
-                                self._wait(wait)
-                        else:
-                            if result.get('protected'):
-                                # 보호조치: 계정 suspended 처리
-                                try:
-                                    self.account_mgr.update_status(grp, acc['account_id'], 'suspended')
-                                except:
-                                    pass
-
-                                # 쿠키 삭제
-                                cookie_path = f"cookies/{acc['account_id']}_cookies.json"
-                                if os.path.exists(cookie_path):
-                                    os.remove(cookie_path)
-
-                                # 계정 초기화
-                                try:
-                                    self.settings_mgr.update_setting(grp, account='')
-                                    self._cache['settings'][grp]['account'] = ''
-                                except:
-                                    pass
-
-                                self.log(f"[{grp}] {acc['account_id']} 보호조치 -> suspended", 'error')
-
-                                # 콘텐츠는 ready로 복원
-                                try:
-                                    self.content_mgr.release_publishing_lock(content['sheet_name'], content['row_num'])
-                                except:
-                                    pass
-                                # 보호조치 후 다음 계정으로 계속 시도
-                            else:
-                                self.stats['failed'] += 1
-
-                        # 통계 업데이트 콜백
-                        if on_stats_update:
-                            on_stats_update(self.stats['published'], self.stats['failed'])
-
-                        # 새로고침 콜백
-                        if on_refresh:
-                            on_refresh()
-
-                    except Exception as e:
-                        self.log(f"[{grp}] 루프 오류: {e}", 'error')
-                        had_network_error = True
-                        consecutive_network_errors += 1
-                        if consecutive_network_errors >= 3:
-                            self._refresh_cache(groups)
-                            consecutive_network_errors = 0
-                        self._wait(3)
-
-                    finally:
-                        try:
-                            self.settings_mgr.release_lock(grp, self.bot_id)
-                        except:
-                            pass
-
-                # 그룹 완료 로그
-                if not self.stop_requested:
-                    self.log(f"=== [{grp}] 그룹 발행 완료 ===", 'success')
-
-            # 모든 그룹 완료
-            if not self.stop_requested:
-                self.log("모든 그룹 발행 완료!", 'success')
+                # 모든 그룹에 콘텐츠 없으면 대기 후 재확인
+                if not self.stop_requested and not published_any:
+                    self.log("대기중... (30초 후 재확인)", 'info')
+                    self._refresh_cache(groups)  # 캐시 갱신
+                    self._wait(30)
 
         finally:
             self.log("발행 엔진 종료", 'warning')

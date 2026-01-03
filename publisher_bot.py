@@ -765,7 +765,60 @@ class PublisherBot:
                  bg='#666', fg='white', font=('맑은 고딕', 9), relief='flat', padx=12).pack(side='left', padx=3)
 
 
+def check_and_install_playwright():
+    """Playwright 브라우저 설치 확인 - 없으면 설치 안내"""
+    import webbrowser
+
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            browser.close()
+        return True
+    except Exception as e:
+        error_msg = str(e)
+        if "Executable doesn't exist" in error_msg or "browserType.launch" in error_msg or "playwright install" in error_msg.lower():
+            # 브라우저 설치 필요 - 설치 안내
+            root = tk.Tk()
+            root.withdraw()
+
+            result = messagebox.askyesno(
+                "Chromium 브라우저 필요",
+                "Chromium 브라우저가 설치되어 있지 않습니다.\n\n"
+                "Python 설치 페이지를 여시겠습니까?\n\n"
+                "설치 후 명령 프롬프트에서:\n"
+                "  pip install playwright\n"
+                "  playwright install chromium\n\n"
+                "위 명령어를 실행해주세요.",
+                parent=root
+            )
+
+            if result:
+                # Python 다운로드 페이지 열기
+                webbrowser.open("https://www.python.org/downloads/")
+                messagebox.showinfo(
+                    "설치 안내",
+                    "Python 다운로드 페이지가 열렸습니다.\n\n"
+                    "1. Python 설치 (Add to PATH 체크!)\n"
+                    "2. 명령 프롬프트 실행\n"
+                    "3. pip install playwright 실행\n"
+                    "4. playwright install chromium 실행\n"
+                    "5. 발행봇 다시 실행",
+                    parent=root
+                )
+
+            root.destroy()
+            return False
+        else:
+            messagebox.showerror("오류", f"Playwright 오류:\n{error_msg}")
+            return False
+
+
 def main():
+    # Playwright 브라우저 확인
+    if not check_and_install_playwright():
+        return
+
     root = tk.Tk()
     PublisherBot(root)
     root.mainloop()
