@@ -16,9 +16,39 @@ import calendar
 from src.sheets.license_manager import LicenseManager
 from src.sheets.content_manager_v2 import ContentManagerV2
 from src.content.gemini_generator import GeminiGenerator
+from src.content.gpt_generator import GPTGenerator
 from src.crawler.naver_blog_crawler import NaverBlogCrawler
 from src.utils.naver_html_generator import NaverHTMLGenerator
 from src.drive.image_manager import DriveImageManager
+
+
+# URL 리라이팅 기본 프롬프트
+DEFAULT_REWRITE_PROMPT = """글을 제공할건데, 글의 문단 및 구조는 비교하기 쉽게 그대로 제공해주고, 글의 말투 어미를 동일하게 바꾸는데, 조금 길게 바꿔주고, 조사도 중간중간 많이 바꿔줘."""
+
+# 프롬프트 작성 탭 기본 지시사항
+DEFAULT_PROMPT_INSTRUCTION = """[출력 형식]
+제목: (여기에 제목)
+
+본문:
+(여기에 본문)
+
+[글 구조 - SEO]
+- 제목: 키워드 포함, 30자 이내
+- 서론: 키워드 포함
+- 본론: 소제목 2-3개로 구분
+- 결론: 요약
+- 글자 수: {char_limit}자 내외
+
+[서식 마커]
+- {{quote:인용문}}: 핵심 문장 강조
+- {{table:A<C>B<R>C<C>D}}: 비교/정리 표 (<C>=열, <R>=행)
+- {{hr}}: 섹션 구분선
+
+[규칙]
+1. 마크다운(**, ##, #) 절대 금지
+2. 인용구/표를 적절히 활용
+3. 키워드 자연스럽게 3-5회 포함
+4. 제목과 본문만 출력"""
 
 
 class ContentCreatorProV3:
@@ -51,6 +81,7 @@ class ContentCreatorProV3:
 
         # 변수
         self.generating = False
+        self.custom_prompt_instruction = None  # 커스텀 지시사항 (None이면 기본값 사용)
         self.stop_requested = False
         self.current_license = None
         self.editing_content_id = None
@@ -485,8 +516,13 @@ class ContentCreatorProV3:
         self.url_links_text.pack(fill='x', pady=(3, 0))
 
         # 커스텀 프롬프트
-        tk.Label(main_frame, text="커스텀 프롬프트 (선택):", bg='white',
-                font=('맑은 고딕', 9)).pack(anchor='w')
+        prompt_label_frame = tk.Frame(main_frame, bg='white')
+        prompt_label_frame.pack(fill='x')
+        tk.Label(prompt_label_frame, text="커스텀 프롬프트 (선택):", bg='white',
+                font=('맑은 고딕', 9)).pack(side='left')
+        tk.Button(prompt_label_frame, text="기본값", command=self.show_default_prompt_popup,
+                 bg='#607D8B', fg='white', font=('맑은 고딕', 8), relief='flat',
+                 padx=6, cursor='hand2').pack(side='left', padx=(5, 0))
 
         self.custom_prompt_url = scrolledtext.ScrolledText(main_frame, height=2,
                                                           font=('맑은 고딕', 9),
@@ -510,11 +546,11 @@ class ContentCreatorProV3:
                   font=('맑은 고딕', 9)).pack(side='left', padx=(3, 8))
 
         tk.Label(opt_row, text="AI:", bg='white', font=('맑은 고딕', 9)).pack(side='left')
-        self.ai_var_url = tk.StringVar(value='gemini')
+        self.ai_var_url = tk.StringVar(value='gpt')
+        tk.Radiobutton(opt_row, text="GPT", variable=self.ai_var_url,
+                      value='gpt', bg='white', font=('맑은 고딕', 8)).pack(side='left')
         tk.Radiobutton(opt_row, text="Gemini", variable=self.ai_var_url,
                       value='gemini', bg='white', font=('맑은 고딕', 8)).pack(side='left')
-        tk.Radiobutton(opt_row, text="Claude", variable=self.ai_var_url,
-                      value='claude', bg='white', font=('맑은 고딕', 8)).pack(side='left')
 
         opt_row2 = tk.Frame(option_frame, bg='white')
         opt_row2.pack(fill='x', pady=(5, 0))
@@ -609,8 +645,13 @@ class ContentCreatorProV3:
                 bg='#E3F2FD', fg='#1565C0', font=('맑은 고딕', 9), padx=8, pady=4).pack(fill='x', pady=(0, 8))
 
         # 프롬프트
-        tk.Label(main_frame, text="프롬프트 (필수):", bg='white',
-                font=('맑은 고딕', 9, 'bold')).pack(anchor='w')
+        prompt_label_frame = tk.Frame(main_frame, bg='white')
+        prompt_label_frame.pack(fill='x')
+        tk.Label(prompt_label_frame, text="프롬프트 (필수):", bg='white',
+                font=('맑은 고딕', 9, 'bold')).pack(side='left')
+        tk.Button(prompt_label_frame, text="AI 지시사항", command=self.show_prompt_instruction_popup,
+                 bg='#607D8B', fg='white', font=('맑은 고딕', 8), relief='flat',
+                 padx=6, cursor='hand2').pack(side='left', padx=(5, 0))
 
         self.prompt_text = scrolledtext.ScrolledText(main_frame, height=4,
                                                     font=('맑은 고딕', 9), wrap='word')
@@ -655,11 +696,11 @@ class ContentCreatorProV3:
         opt_row2.pack(fill='x')
 
         tk.Label(opt_row2, text="AI:", bg='white', font=('맑은 고딕', 9)).pack(side='left')
-        self.ai_var_prompt = tk.StringVar(value='gemini')
+        self.ai_var_prompt = tk.StringVar(value='gpt')
+        tk.Radiobutton(opt_row2, text="GPT", variable=self.ai_var_prompt,
+                      value='gpt', bg='white', font=('맑은 고딕', 8)).pack(side='left')
         tk.Radiobutton(opt_row2, text="Gemini", variable=self.ai_var_prompt,
                       value='gemini', bg='white', font=('맑은 고딕', 8)).pack(side='left')
-        tk.Radiobutton(opt_row2, text="Claude", variable=self.ai_var_prompt,
-                      value='claude', bg='white', font=('맑은 고딕', 8)).pack(side='left')
 
         # 이미지 마커 옵션
         img_frame = tk.LabelFrame(main_frame, text=" 이미지 마커 ", bg='white',
@@ -951,6 +992,87 @@ class ContentCreatorProV3:
         edit_tab = tk.Frame(self.mgmt_notebook, bg='white')
         self.mgmt_notebook.add(edit_tab, text="  ✏️ 원고 수정  ")
         self.create_edit_tab(edit_tab)
+
+    def show_default_prompt_popup(self):
+        """기본 프롬프트 팝업 표시"""
+        popup = tk.Toplevel(self.root)
+        popup.title("기본 리라이팅 프롬프트")
+        popup.geometry("500x300")
+        popup.resizable(True, True)
+        popup.configure(bg='white')
+        popup.transient(self.root)
+        popup.grab_set()
+
+        # 설명
+        tk.Label(popup, text="프롬프트를 입력하지 않으면 아래 기본값이 사용됩니다.\n수정 후 '적용' 버튼을 누르면 입력창에 복사됩니다.",
+                bg='white', font=('맑은 고딕', 9), fg='#666', justify='left').pack(anchor='w', padx=15, pady=(15, 10))
+
+        # 프롬프트 텍스트
+        prompt_text = scrolledtext.ScrolledText(popup, font=('맑은 고딕', 10), wrap='word', height=10)
+        prompt_text.pack(fill='both', expand=True, padx=15, pady=(0, 10))
+        prompt_text.insert('1.0', DEFAULT_REWRITE_PROMPT)
+
+        # 버튼
+        btn_frame = tk.Frame(popup, bg='white')
+        btn_frame.pack(fill='x', padx=15, pady=(0, 15))
+
+        def apply_prompt():
+            text = prompt_text.get('1.0', 'end').strip()
+            self.custom_prompt_url.delete('1.0', 'end')
+            self.custom_prompt_url.insert('1.0', text)
+            popup.destroy()
+
+        tk.Button(btn_frame, text="적용", command=apply_prompt,
+                 bg='#4CAF50', fg='white', font=('맑은 고딕', 10, 'bold'),
+                 relief='flat', padx=20, cursor='hand2').pack(side='left')
+        tk.Button(btn_frame, text="취소", command=popup.destroy,
+                 bg='#666', fg='white', font=('맑은 고딕', 10),
+                 relief='flat', padx=20, cursor='hand2').pack(side='left', padx=(10, 0))
+
+    def show_prompt_instruction_popup(self):
+        """프롬프트 작성 탭 AI 지시사항 팝업"""
+        popup = tk.Toplevel(self.root)
+        popup.title("AI 지시사항 설정")
+        popup.geometry("550x450")
+        popup.resizable(True, True)
+        popup.configure(bg='white')
+        popup.transient(self.root)
+        popup.grab_set()
+
+        # 설명
+        tk.Label(popup, text="프롬프트 뒤에 자동으로 추가되는 AI 지시사항입니다.\n{char_limit}는 글자수 설정값으로 자동 치환됩니다.",
+                bg='white', font=('맑은 고딕', 9), fg='#666', justify='left').pack(anchor='w', padx=15, pady=(15, 10))
+
+        # 현재 지시사항 표시
+        current_instruction = self.custom_prompt_instruction if self.custom_prompt_instruction else DEFAULT_PROMPT_INSTRUCTION
+
+        instruction_text = scrolledtext.ScrolledText(popup, font=('맑은 고딕', 10), wrap='word', height=15)
+        instruction_text.pack(fill='both', expand=True, padx=15, pady=(0, 10))
+        instruction_text.insert('1.0', current_instruction)
+
+        # 버튼
+        btn_frame = tk.Frame(popup, bg='white')
+        btn_frame.pack(fill='x', padx=15, pady=(0, 15))
+
+        def apply_instruction():
+            text = instruction_text.get('1.0', 'end').strip()
+            self.custom_prompt_instruction = text if text else None
+            popup.destroy()
+            self.show_success("AI 지시사항이 적용되었습니다")
+
+        def reset_to_default():
+            instruction_text.delete('1.0', 'end')
+            instruction_text.insert('1.0', DEFAULT_PROMPT_INSTRUCTION)
+
+        tk.Button(btn_frame, text="적용", command=apply_instruction,
+                 bg='#4CAF50', fg='white', font=('맑은 고딕', 10, 'bold'),
+                 relief='flat', padx=20, cursor='hand2').pack(side='left')
+        tk.Button(btn_frame, text="기본값 복원", command=reset_to_default,
+                 bg='#FF9800', fg='white', font=('맑은 고딕', 10),
+                 relief='flat', padx=15, cursor='hand2').pack(side='left', padx=(10, 0))
+        tk.Button(btn_frame, text="취소", command=popup.destroy,
+                 bg='#666', fg='white', font=('맑은 고딕', 10),
+                 relief='flat', padx=20, cursor='hand2').pack(side='left', padx=(10, 0))
 
     def toggle_right_panel(self):
         """오른쪽 패널 접기/펼치기 (창 크기 조절)"""
@@ -1330,13 +1452,9 @@ class ContentCreatorProV3:
 
     def get_ai_instruction_suffix(self, char_limit='800'):
         """AI 지시사항 접미사"""
-        return f"""
-
-[중요 지시사항]
-1. 글자 수: {char_limit}자 내외로 작성.
-2. 서식 금지: 제목이나 본문에 절대로 **, ##, ###, # 같은 마크다운 서식 사용 금지.
-3. 글 자체를 읽기 좋게 자연스럽게 작성. 굵은 글씨나 헤더 대신 문단 구분이나 테이블 형태의 표도 사용.
-4. 제목은 간결하고 명확하게 작성."""
+        # 커스텀 지시사항이 있으면 사용, 없으면 기본값
+        template = self.custom_prompt_instruction if self.custom_prompt_instruction else DEFAULT_PROMPT_INSTRUCTION
+        return "\n\n" + template.format(char_limit=char_limit)
 
     def start_url_generation(self):
         """URL 리라이팅 생성 시작 (다중 링크 지원)"""
@@ -1390,7 +1508,12 @@ class ContentCreatorProV3:
         self.url_start_btn.config(state='disabled', bg='#999')
         self.url_stop_btn.config(state='normal', bg='#F44336')
 
-        ai_name = "Gemini 2.5 Flash" if ai_type == 'gemini' else "Claude 3.5 Sonnet"
+        if ai_type == 'gemini':
+            ai_name = "Gemini 2.5 Flash"
+        elif ai_type == 'gpt':
+            ai_name = "GPT-4o mini"
+        else:
+            ai_name = "Claude 3.5 Sonnet"
 
         def generate_thread():
             success_count = 0
@@ -1428,7 +1551,10 @@ class ContentCreatorProV3:
                     ))
 
                     try:
-                        generator = GeminiGenerator()
+                        if ai_type == 'gpt':
+                            generator = GPTGenerator()
+                        else:
+                            generator = GeminiGenerator()
 
                         if custom_prompt:
                             full_prompt = f"""{custom_prompt}
@@ -1528,7 +1654,12 @@ class ContentCreatorProV3:
         self.prompt_start_btn.config(state='disabled', bg='#999')
         self.prompt_stop_btn.config(state='normal', bg='#F44336')
 
-        ai_name = "Gemini 2.5 Flash" if ai_type == 'gemini' else "Claude 3.5 Sonnet"
+        if ai_type == 'gemini':
+            ai_name = "Gemini 2.5 Flash"
+        elif ai_type == 'gpt':
+            ai_name = "GPT-4o mini"
+        else:
+            ai_name = "Claude 3.5 Sonnet"
 
         def generate_thread():
             success_count = 0
@@ -1549,7 +1680,10 @@ class ContentCreatorProV3:
                 ))
 
                 try:
-                    generator = GeminiGenerator()
+                    if ai_type == 'gpt':
+                        generator = GPTGenerator()
+                    else:
+                        generator = GeminiGenerator()
 
                     image_instruction = ""
                     if auto_image and image_position == 'auto':

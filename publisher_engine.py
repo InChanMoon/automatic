@@ -110,12 +110,15 @@ class PublisherEngine:
     def stop(self):
         """중지 요청 - 즉시 브라우저 종료"""
         self.stop_requested = True
+        self.log("중지 요청됨", 'warning')
+
         # 현재 실행 중인 publisher가 있으면 강제 종료
         if self._current_publisher:
             try:
                 self._current_publisher.request_stop()
             except:
                 pass
+            self._current_publisher = None
 
     def _is_cache_valid(self) -> bool:
         """캐시 유효성 확인"""

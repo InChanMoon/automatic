@@ -149,11 +149,26 @@ class NaverBlogPublisher:
     def request_stop(self):
         """중지 요청 - 브라우저 강제 종료"""
         self.stop_requested = True
-        self.log("중지 요청됨 - 브라우저 종료 중...")
+        self.log("중지 요청됨 - 브라우저 강제 종료 중...")
+
+        # 더 강제적인 종료: browser를 먼저 kill
         try:
-            self.close_browser()
+            if self.browser:
+                self.browser.close()
+                self.browser = None
         except:
             pass
+
+        try:
+            if self.playwright:
+                self.playwright.stop()
+                self.playwright = None
+        except:
+            pass
+
+        self.page = None
+        self.context = None
+        self.is_logged_in = False
 
     def set_log_callback(self, callback: Callable[[str], None]):
         """로그 콜백 설정"""
